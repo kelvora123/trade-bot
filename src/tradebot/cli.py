@@ -15,6 +15,7 @@ import json
 import logging
 import sys
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from .config import load_config
@@ -28,6 +29,7 @@ from .paper.book import PaperBook
 from .paper.broker import OrderRejected, PaperBroker
 from .paper.performance import compute_performance, history_progress
 from .portfolio import load_portfolio, load_sectors
+from .report.dashboard import render_standalone
 from .report.render import growth_math, render_markdown, write_reports
 from .store import Store
 from .types import AssetKind, Holding, OptionKind, today_utc, utcnow
@@ -127,6 +129,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         payload = {
             "asof": asof.isoformat(),
             "generated_at": utcnow().isoformat(),
+            # The dashboard plots this, so it travels with the payload rather
+            # than being re-read from the database by whatever renders it.
+            "equity_curve": store.equity_curve(),
             "layer1_valuation": val_json,
             "layer2_analytics": ana_json,
             "layer3_macro": macro_json,
@@ -137,12 +142,34 @@ def cmd_run(args: argparse.Namespace) -> int:
         }
         markdown = render_markdown(val_json, ana_json, macro_json, news_json, diffs, paper_json, growth)
         md_path, json_path = write_reports(cfg.path("reports_dir"), asof, markdown, payload)
+        html_path = cfg.path("reports_dir") / f"dashboard_{asof:%Y-%m-%d}.html"
+        html_path.write_text(render_standalone(payload))
+        (cfg.path("reports_dir") / "dashboard.html").write_text(render_standalone(payload))
 
     if args.json:
         print(json.dumps(payload, indent=2, default=str))
     else:
         print(markdown)
-    log.info("wrote %s and %s", md_path.name, json_path.name)
+    log.info("wrote %s, %s and %s", md_path.name, json_path.name, html_path.name)
+    return 0
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    """Re-render the dashboard from a stored run, without re-pulling data."""
+    cfg = load_config(args.config, root=args.root)
+    asof = date.fromisoformat(args.asof) if args.asof else today_utc()
+
+    source = Path(args.source) if args.source else (cfg.path("reports_dir") / "latest.json")
+    if not source.exists():
+        log.error("no run payload at %s -- run `tradebot run` first", source)
+        return 1
+
+    payload = json.loads(source.read_text())
+    out = Path(args.output) if args.output else (cfg.path("reports_dir") / "dashboard.html")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_standalone(payload))
+    print(out)
+    log.info("dashboard written from %s (run dated %s)", source.name, payload.get("asof", asof))
     return 0
 
 
@@ -417,6 +444,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("status", help="paper book, performance, and history progress")
     st.set_defaults(func=cmd_status)
+
+    dash = sub.add_parser("dashboard", help="render the HTML dashboard from a stored run")
+    dash.add_argument("--source", help="run JSON to render (default: reports/latest.json)")
+    dash.add_argument("--output", help="where to write the HTML (default: reports/dashboard.html)")
+    dash.set_defaults(func=cmd_dashboard)
 
     val = sub.add_parser("value", help="layer 1 only: mark the book")
     val.set_defaults(func=cmd_value)

@@ -139,28 +139,32 @@ def _concentration_flags(
     flags = []
     for name, w in by_ticker.items():
         if w > caps.ticker_concentration_cap:
+            # Format the message from the already-rounded weight so the flag
+            # text and the dashboard's bar label never disagree by a decimal.
+            pct = round(w * 100, 2)
             flags.append(
                 {
                     "kind": "ticker",
                     "name": name,
-                    "weight_pct": round(w * 100, 2),
+                    "weight_pct": pct,
                     "cap_pct": round(caps.ticker_concentration_cap * 100, 2),
                     "message": (
-                        f"{name} is {w * 100:.1f}% of book value, above the "
+                        f"{name} is {pct:.1f}% of book value, above the "
                         f"{caps.ticker_concentration_cap * 100:.0f}% concentration cap."
                     ),
                 }
             )
     for name, w in by_sector.items():
         if w > caps.sector_concentration_cap:
+            pct = round(w * 100, 2)
             flags.append(
                 {
                     "kind": "sector",
                     "name": name,
-                    "weight_pct": round(w * 100, 2),
+                    "weight_pct": pct,
                     "cap_pct": round(caps.sector_concentration_cap * 100, 2),
                     "message": (
-                        f"Sector {name} is {w * 100:.1f}% of book value, above the "
+                        f"Sector {name} is {pct:.1f}% of book value, above the "
                         f"{caps.sector_concentration_cap * 100:.0f}% concentration cap."
                     ),
                 }

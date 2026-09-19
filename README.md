@@ -119,6 +119,35 @@ Realised P&L reconciles exactly against the cash balance — entry commissions
 are carried on the position and released pro-rata as it closes, rather than
 quietly inflating round-trip P&L. A test pins that invariant.
 
+### The dashboard
+
+Every `tradebot run` writes `reports/dashboard.html` alongside the Markdown and
+JSON — one self-contained file with no network dependency beyond its webfont,
+so it opens from a `file://` URL. `tradebot dashboard` re-renders it from a
+stored run without re-pulling market data.
+
+It leads with the aggregate Greeks, because on an options book net delta and
+daily theta are the numbers that decide what today looks like. Below that: the
+equity curve over an underwater drawdown panel (two panels sharing an x-scale,
+never two y-axes on one chart), the marked positions, allocation with
+concentration flags, unrealised P&L as diverging bars, IV rank meters with the
+cheap and rich bands shaded, and the expiry watch.
+
+One colour decision worth stating: **P&L uses blue for gain and red for loss,
+not green and red.** Red/green is exactly the pair red-green colourblind readers
+cannot separate, and sign is the most important thing on that chart. The
+categorical palette is validated for colourblind separation in both light and
+dark, and every bar carries a direct label rather than relying on its fill.
+
+Both themes are designed, not inverted. A demo dataset is available if you want
+to see it populated before you have history of your own:
+
+```bash
+python scripts/seed_demo.py --root /tmp/demo
+tradebot --root /tmp/demo --offline --asof 2026-09-18 run --no-news --no-macro
+open /tmp/demo/reports/dashboard.html
+```
+
 ---
 
 ## The three layers
@@ -232,6 +261,7 @@ tradebot run --no-news          # full pipeline, zero API cost
 | `tradebot buy` / `sell` | Record a simulated fill |
 | `tradebot close SYM --price P` | Close an open paper position in full |
 | `tradebot status` | Book, performance, and history progress |
+| `tradebot dashboard` | Re-render the HTML dashboard from a stored run |
 | `tradebot value` | Layer 1 only, as JSON |
 | `tradebot macro` | The deterministic macro gate only (free) |
 | `tradebot paper --check-affordable SYM --qty 1 --mark 13.0` | Prices a hypothetical order |
@@ -322,7 +352,7 @@ src/tradebot/
   layer2/  analytics.py
   layer3/  macro.py  news.py
   paper/   book.py  broker.py  performance.py
-  report/  render.py
+  report/  render.py  dashboard.py
   cli.py
 n8n/workflows/       importable workflow JSON
 .github/workflows/   CI and the daily run
