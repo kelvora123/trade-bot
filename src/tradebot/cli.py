@@ -24,11 +24,13 @@ from .layer1.valuation import value_book
 from .layer2.analytics import analyse
 from .layer3.macro import compute_macro_gate
 from .layer3.news import analyse_news
+from .paper.book import PaperBook
 from .paper.broker import OrderRejected, PaperBroker
+from .paper.performance import compute_performance, history_progress
 from .portfolio import load_portfolio, load_sectors
 from .report.render import growth_math, render_markdown, write_reports
 from .store import Store
-from .types import today_utc, utcnow
+from .types import AssetKind, Holding, OptionKind, today_utc, utcnow
 
 log = logging.getLogger("tradebot")
 
@@ -67,12 +69,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.no_macro:
         cfg.macro.enabled = False
 
-    holdings = load_portfolio(cfg.path("portfolio"))
     sectors = load_sectors(cfg.path("sectors"))
-    if not holdings:
-        log.warning("portfolio is empty; nothing to value")
 
     with Store(cfg.path("database")) as store:
+        holdings, book_source = _resolve_book(args.book, cfg, store)
+        if not holdings:
+            log.warning("book is empty (source: %s); nothing to value", book_source)
+        else:
+            log.info("valuing %d position(s) from the %s book", len(holdings), book_source)
         provider = _build_provider(args, store, asof)
         tickers = sorted({h.ticker for h in holdings})
 
@@ -113,6 +117,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         # ---- Paper account ------------------------------------------------
         broker = PaperBroker(cfg, store)
         paper_json = broker.mark_to_market(valuation.total_value, asof)
+        paper_json["book_source"] = book_source
+        perf = compute_performance(
+            store.equity_curve(), store.closed_trades(), cfg.valuation.risk_free_rate
+        )
+        paper_json["performance"] = perf.to_json()
 
         growth = growth_math(cfg.paper.starting_cash, args.target, cfg.paper.currency)
         payload = {
@@ -134,6 +143,133 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         print(markdown)
     log.info("wrote %s and %s", md_path.name, json_path.name)
+    return 0
+
+
+def _resolve_book(choice: str, cfg: Any, store: Store) -> tuple[list[Holding], str]:
+    """Pick between the simulated paper book and the declared portfolio file.
+
+    Default is ``auto``: the paper book when it holds anything, the file
+    otherwise. In paper-only operation the paper book is the live one, and
+    silently valuing a stale YAML file instead would be the wrong answer.
+    """
+    book = PaperBook(store)
+    if choice == "file":
+        return load_portfolio(cfg.path("portfolio")), "file"
+    if choice == "paper":
+        return book.holdings(), "paper"
+    if not book.is_empty():
+        return book.holdings(), "paper"
+    try:
+        return load_portfolio(cfg.path("portfolio")), "file"
+    except FileNotFoundError:
+        return [], "paper (empty)"
+
+
+def _holding_from_args(args: argparse.Namespace, store: Store) -> Holding:
+    """Build the Holding for a trade, reusing an open position's terms if any."""
+    existing = store.get_position(args.symbol)
+    if existing is not None:
+        return Holding(
+            ticker=existing["ticker"],
+            kind=AssetKind(existing["kind"]),
+            qty=args.qty,
+            cost_basis=existing["avg_price"],
+            option_kind=OptionKind(existing["option_kind"]) if existing["option_kind"] else None,
+            strike=existing["strike"],
+            expiry=date.fromisoformat(existing["expiry"]) if existing["expiry"] else None,
+            target=existing["target"],
+            stop=existing["stop"],
+            multiplier=int(existing["multiplier"]),
+        )
+
+    if args.shares:
+        return Holding(args.symbol.upper(), AssetKind.SHARES, args.qty, args.price,
+                       target=args.target, stop=args.stop, multiplier=1)
+
+    missing = [f for f, v in (("--strike", args.strike), ("--expiry", args.expiry),
+                              ("--type", args.type), ("--ticker", args.ticker)) if not v]
+    if missing:
+        raise ValueError(
+            f"opening a new option position needs {', '.join(missing)} "
+            "(or pass --shares for an equity position)"
+        )
+    return Holding(
+        ticker=args.ticker.upper(),
+        kind=AssetKind.OPTION,
+        qty=args.qty,
+        cost_basis=args.price,
+        option_kind=OptionKind(args.type),
+        strike=args.strike,
+        expiry=date.fromisoformat(args.expiry),
+        target=args.target,
+        stop=args.stop,
+    )
+
+
+def cmd_trade(args: argparse.Namespace) -> int:
+    """Record a simulated buy or sell against the paper book."""
+    cfg = load_config(args.config, root=args.root)
+    asof = date.fromisoformat(args.asof) if args.asof else today_utc()
+    with Store(cfg.path("database")) as store:
+        broker = PaperBroker(cfg, store)
+        holding = _holding_from_args(args, store)
+        fn = broker.buy if args.command == "buy" else broker.sell
+        fill = fn(holding, abs(args.qty), mark=args.price, bid=args.bid, ask=args.ask,
+                  reason=args.reason, asof=asof)
+        out = fill.to_json()
+        out["cash_after"] = round(broker.cash, 2)
+    print(json.dumps(out, indent=2))
+    return 0
+
+
+def cmd_close(args: argparse.Namespace) -> int:
+    """Close an open paper position in full at the given price."""
+    cfg = load_config(args.config, root=args.root)
+    asof = date.fromisoformat(args.asof) if args.asof else today_utc()
+    with Store(cfg.path("database")) as store:
+        existing = store.get_position(args.symbol)
+        if existing is None:
+            log.error("no open paper position for %r", args.symbol)
+            return 1
+        broker = PaperBroker(cfg, store)
+        args.qty = abs(existing["qty"])
+        holding = _holding_from_args(args, store)
+        # A long position is closed by selling; a short by buying it back.
+        fn = broker.sell if existing["qty"] > 0 else broker.buy
+        fill = fn(holding, args.qty, mark=args.price, bid=args.bid, ask=args.ask,
+                  reason=args.reason or "close", asof=asof)
+        out = fill.to_json()
+        out["cash_after"] = round(broker.cash, 2)
+    print(json.dumps(out, indent=2))
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Where the paper run stands: the book, performance, history accumulated."""
+    cfg = load_config(args.config, root=args.root)
+    with Store(cfg.path("database")) as store:
+        broker = PaperBroker(cfg, store)
+        curve = store.equity_curve()
+        perf = compute_performance(curve, store.closed_trades(), cfg.valuation.risk_free_rate)
+        progress = history_progress(
+            store.history_coverage(), cfg.iv_env.min_history_days, cfg.iv_env.rank_lookback_days
+        )
+        payload = {
+            "mode": cfg.execution.mode,
+            "currency": cfg.paper.currency,
+            "starting_cash": cfg.paper.starting_cash,
+            "cash": round(broker.cash, 2),
+            "open_positions": store.all_positions(),
+            "equity_points": len(curve),
+            "latest_equity": curve[-1][1] if curve else None,
+            "performance": perf.to_json(),
+            "history_progress": progress,
+            "snapshots_stored": store.snapshot_count(),
+        }
+        tokens_in, tokens_out = store.llm_tokens_total()
+        payload["llm_spend"] = {"input_tokens": tokens_in, "output_tokens": tokens_out}
+    print(json.dumps(payload, indent=2, default=str))
     return 0
 
 
@@ -249,7 +385,38 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-news", action="store_true", help="force the Claude news layer off")
     run.add_argument("--no-macro", action="store_true", help="skip the macro gate")
     run.add_argument("--target", type=float, default=400_000.0, help="growth target for the reality check")
+    run.add_argument("--book", choices=["auto", "paper", "file"], default="auto",
+                     help="which book to value (default: paper if it has positions)")
     run.set_defaults(func=cmd_run)
+
+    for verb in ("buy", "sell"):
+        t = sub.add_parser(verb, help=f"record a simulated {verb} (paper only)")
+        t.add_argument("symbol", help="OCC symbol of an open position, or a ticker when opening")
+        t.add_argument("--qty", type=float, required=True, help="contracts, or shares with --shares")
+        t.add_argument("--price", type=float, required=True, help="premium per share (not x100)")
+        t.add_argument("--bid", type=float, help="for realistic spread-crossing slippage")
+        t.add_argument("--ask", type=float)
+        t.add_argument("--shares", action="store_true", help="equity rather than an option")
+        t.add_argument("--ticker", help="underlying, when opening a new option position")
+        t.add_argument("--type", choices=["call", "put"])
+        t.add_argument("--strike", type=float)
+        t.add_argument("--expiry", help="YYYY-MM-DD")
+        t.add_argument("--target", type=float)
+        t.add_argument("--stop", type=float)
+        t.add_argument("--reason", default="")
+        t.set_defaults(func=cmd_trade)
+
+    cl = sub.add_parser("close", help="close an open paper position in full")
+    cl.add_argument("symbol")
+    cl.add_argument("--price", type=float, required=True)
+    cl.add_argument("--bid", type=float)
+    cl.add_argument("--ask", type=float)
+    cl.add_argument("--reason", default="")
+    cl.set_defaults(func=cmd_close, shares=False, ticker=None, type=None,
+                    strike=None, expiry=None, target=None, stop=None)
+
+    st = sub.add_parser("status", help="paper book, performance, and history progress")
+    st.set_defaults(func=cmd_status)
 
     val = sub.add_parser("value", help="layer 1 only: mark the book")
     val.set_defaults(func=cmd_value)

@@ -22,8 +22,11 @@ and by design it does not recommend them. The expiry watch reports that a
 contract has 12 days left and is losing $4.10/day; it will not tell you to roll
 it. That boundary is deliberate and the tests enforce it.
 
-**Paper trading is the only execution mode.** There is no live-broker adapter
-in this repo, and adding one is not a small change.
+**Paper trading is the only execution mode, and that is enforced.**
+`execution.mode` accepts nothing but `paper`: the config loader rejects any
+other value, `PaperBroker` refuses to construct outside paper mode, and a test
+asserts no live-broker adapter is importable anywhere in the package. Live
+trading cannot be switched on by editing a config file.
 
 **On turning £100 into £400,000.** That is a 4,000× return. The system prints
 the arithmetic on every run, because it is the number that decides whether a
@@ -57,6 +60,64 @@ The realistic path is to run this in paper mode against a realistic simulated
 balance, accumulate the snapshot history the IV-rank layer needs (20 days
 minimum, 252 for a full ranking), and fund a real account only once the
 reports have told you something true for a few months.
+
+---
+
+## Running paper-only
+
+The paper book is real state, not a simulation you re-seed each run: positions,
+average prices, realised P&L and the cash balance all persist in SQLite across
+runs.
+
+```bash
+# Open a position (a new option needs its terms; an existing one does not)
+tradebot buy F --qty 1 --price 0.30 --bid 0.28 --ask 0.32 \
+  --ticker F --type call --strike 12.0 --expiry 2026-06-19 \
+  --target 0.90 --stop 0.15
+
+# Add to it, trim it, or close it by OCC symbol
+tradebot buy   F260619C00012000 --qty 1 --price 0.40 --bid 0.38 --ask 0.42
+tradebot sell  F260619C00012000 --qty 1 --price 0.60 --bid 0.58 --ask 0.62
+tradebot close F260619C00012000 --price 0.55 --bid 0.53 --ask 0.57
+
+tradebot status        # book, performance, history progress
+tradebot run           # values the paper book by default
+```
+
+Pass `--bid` and `--ask` whenever you have them. Without them a fill happens at
+your quoted mark, which flatters every result; with them, a market order
+crosses the spread the way a real one does. On a cheap, wide contract that is
+not a rounding error — a £32 entry gave up £2.00, over 6%, in the worked
+example above.
+
+`tradebot run` values the **paper book** when it holds anything and falls back
+to `config/portfolio.yaml` otherwise; `--book paper|file` forces either. The
+run logs which one it used, so a populated paper book can never be silently
+valued against a stale file.
+
+### What to watch over the first few months
+
+`tradebot status` reports progress toward the two thresholds that gate the
+analytics:
+
+| | Needed | Why |
+|---|---|---|
+| Snapshot history | **20 days** | Below this, IV rank reports `building history` |
+| Full lookback | **252 days** | A rank over a full year of vol, not a fortnight |
+| Closed trades | **10+** | Below this, win rate and profit factor mean little |
+| Equity points | **60 days** | Below this, annualised return is withheld |
+
+That last one is deliberate: a 9% gain over eleven days annualises to a number
+that is worse than no number, so the field stays `None` with the reason
+printed. Same for profit factor before a first losing trade.
+
+**Max drawdown is measured on the equity curve, not on closed trades.** A book
+can show a clean run of winning round-trips while open positions bleed
+underneath; only the equity curve sees that.
+
+Realised P&L reconciles exactly against the cash balance — entry commissions
+are carried on the position and released pro-rata as it closes, rather than
+quietly inflating round-trip P&L. A test pins that invariant.
 
 ---
 
@@ -167,6 +228,10 @@ tradebot run --no-news          # full pipeline, zero API cost
 | `tradebot run` | All layers; writes `reports/report_YYYY-MM-DD.{md,json}` and `latest.*` |
 | `tradebot run --offline` | Replays stored snapshots — no network |
 | `tradebot run --no-news` | Forces the Claude layer off |
+| `tradebot run --book file` | Value `portfolio.yaml` instead of the paper book |
+| `tradebot buy` / `sell` | Record a simulated fill |
+| `tradebot close SYM --price P` | Close an open paper position in full |
+| `tradebot status` | Book, performance, and history progress |
 | `tradebot value` | Layer 1 only, as JSON |
 | `tradebot macro` | The deterministic macro gate only (free) |
 | `tradebot paper --check-affordable SYM --qty 1 --mark 13.0` | Prices a hypothetical order |
@@ -223,7 +288,7 @@ if n8n is down.
 ## Testing
 
 ```bash
-pytest -q                    # 102 tests, fully offline
+pytest -q                    # 131 tests, fully offline
 ruff check src tests scripts
 python scripts/validate_n8n.py
 ```
@@ -238,6 +303,11 @@ that shorts count toward concentration rather than netting against it; that the
 macro gate is deterministic and survives dead feeds; that an unchanged headline
 set costs nothing; and that £100 cannot buy a $1,300 contract.
 
+On the paper side: weighted-average entry, partial closes leaving the average
+untouched, short positions profiting as price falls, positions reversed through
+zero, realised P&L reconciling to the penny against cash, and the paper-only
+guard at all three levels.
+
 ---
 
 ## Layout
@@ -251,7 +321,7 @@ src/tradebot/
   layer1/  blackscholes.py  provider.py  snapshots.py  valuation.py
   layer2/  analytics.py
   layer3/  macro.py  news.py
-  paper/   broker.py
+  paper/   book.py  broker.py  performance.py
   report/  render.py
   cli.py
 n8n/workflows/       importable workflow JSON

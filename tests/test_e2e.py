@@ -194,6 +194,49 @@ def test_usage_subcommand_reports_zero_spend(project, capsys):
     assert payload["estimated_total_cost_usd"] == 0.0
 
 
-def test_missing_portfolio_fails_cleanly(tmp_path, capsys):
+def test_empty_book_on_day_one_is_not_an_error(tmp_path):
+    """Starting with nothing is the normal paper-only starting state."""
     (tmp_path / "config").mkdir()
-    assert main(["--root", str(tmp_path), "--offline", "run"]) == 1
+    assert main(["--root", str(tmp_path), "--offline", "run", "--no-news", "--no-macro"]) == 0
+
+
+def test_explicit_file_book_still_fails_when_the_file_is_missing(tmp_path):
+    (tmp_path / "config").mkdir()
+    assert main(["--root", str(tmp_path), "--offline", "run", "--book", "file"]) == 1
+
+
+def test_run_prefers_the_paper_book_when_it_has_positions(project, capsys):
+    """A populated paper book must win over a stale portfolio file."""
+    from tradebot.config import load_config
+    from tradebot.paper.broker import PaperBroker
+    from tradebot.types import AssetKind, Holding, OptionKind
+
+    cfg = load_config(root=project)
+    with Store(project / "data" / "tradebot.sqlite") as s:
+        cfg.paper.starting_cash = 10_000.0
+        PaperBroker(cfg, s).buy(
+            Holding("NVDA", AssetKind.OPTION, 1, 13.0, OptionKind.CALL, 180.0, EXPIRY),
+            1, mark=13.0, bid=12.9, ask=13.1,
+        )
+
+    main(["--root", str(project), "--offline", "--asof", ASOF.isoformat(),
+          "run", "--no-news", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["paper_account"]["book_source"] == "paper"
+    # The file declares two positions; the paper book holds one.
+    assert len(payload["layer1_valuation"]["positions"]) == 1
+
+
+def test_run_reports_performance_and_open_positions(project, capsys):
+    main(["--root", str(project), "--offline", "--asof", ASOF.isoformat(),
+          "run", "--no-news", "--json"])
+    paper = json.loads(capsys.readouterr().out)["paper_account"]
+    assert paper["mode"] == "paper"
+    assert "performance" in paper and "caveats" in paper["performance"]
+
+
+def test_status_reports_history_progress(project, capsys):
+    assert main(["--root", str(project), "status"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "paper"
+    assert payload["history_progress"]["min_days_for_iv_rank"] == 20

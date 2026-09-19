@@ -21,6 +21,7 @@ from typing import Any
 from ..config import Config
 from ..store import Store
 from ..types import Holding, utcnow
+from .book import PaperBook, PositionChange
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class FillResult:
     commission: float
     slippage: float
     cash_delta: float
+    change: PositionChange | None = None
     notes: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
@@ -51,6 +53,7 @@ class FillResult:
             "commission": round(self.commission, 2),
             "slippage_cost": round(self.slippage, 2),
             "cash_delta": round(self.cash_delta, 2),
+            "position": self.change.to_json() if self.change else None,
             "notes": self.notes,
         }
 
@@ -59,10 +62,20 @@ class PaperBroker:
     """A simulated account. Every fill is recorded; nothing touches a market."""
 
     def __init__(self, cfg: Config, store: Store, cash: float | None = None) -> None:
+        if cfg.execution.mode != "paper":
+            # Defence in depth: config validation rejects this too, but the
+            # broker refuses to construct rather than trust that it ran.
+            raise RuntimeError(
+                f"PaperBroker constructed with execution.mode={cfg.execution.mode!r}. "
+                "This build is paper-only and ships no live-broker adapter."
+            )
         self.cfg = cfg
         self.store = store
-        self.cash = cfg.paper.starting_cash if cash is None else cash
         self.currency = cfg.paper.currency
+        self.book = PaperBook(store)
+        # Cash persists across runs, seeded from config on first use -- otherwise
+        # every nightly run would silently reset the account to its opening balance.
+        self.cash = store.load_cash(cfg.paper.starting_cash) if cash is None else cash
 
     # ------------------------------------------------------------- pricing
 
@@ -143,6 +156,8 @@ class PaperBroker:
 
         self.cash -= total
         self._record(holding, "buy", qty, price, commission, slip_per_share * shares, reason, asof)
+        change = self.book.apply_fill(holding, "buy", qty, price, commission, reason, asof)
+        self.store.save_cash(self.cash, utcnow().isoformat())
         return FillResult(
             symbol=holding.occ_symbol(),
             side="buy",
@@ -151,6 +166,7 @@ class PaperBroker:
             commission=commission,
             slippage=slip_per_share * shares,
             cash_delta=-total,
+            change=change,
         )
 
     def sell(
@@ -175,6 +191,8 @@ class PaperBroker:
 
         self.cash += net
         self._record(holding, "sell", qty, price, commission, slip_per_share * shares, reason, asof)
+        change = self.book.apply_fill(holding, "sell", qty, price, commission, reason, asof)
+        self.store.save_cash(self.cash, utcnow().isoformat())
         return FillResult(
             symbol=holding.occ_symbol(),
             side="sell",
@@ -183,6 +201,7 @@ class PaperBroker:
             commission=commission,
             slippage=slip_per_share * shares,
             cash_delta=net,
+            change=change,
         )
 
     def _record(
@@ -217,8 +236,11 @@ class PaperBroker:
         self.store.record_equity(asof, self.cash, positions_value, equity)
         return {
             "asof": asof.isoformat(),
+            "mode": "paper",
             "cash": round(self.cash, 2),
             "positions_value": round(positions_value, 2),
             "equity": round(equity, 2),
+            "realised_pnl_to_date": round(self.book.realised_total(), 2),
+            "open_positions": len(self.store.all_positions()),
             "currency": self.currency,
         }

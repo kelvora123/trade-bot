@@ -231,10 +231,45 @@ def render_markdown(
             "## Paper account",
             "",
             f"- Cash: {_money(paper.get('cash'))} {paper.get('currency', '')}",
-            f"- Positions: {_money(paper.get('positions_value'))}",
+            f"- Positions: {_money(paper.get('positions_value'))} "
+            f"({paper.get('open_positions', 0)} open)",
             f"- **Equity: {_money(paper.get('equity'))}**",
+            f"- Realised to date: {_money(paper.get('realised_pnl_to_date'))}",
             "",
         ]
+        perf = paper.get("performance") or {}
+        eq, tr = perf.get("equity", {}), perf.get("trades", {})
+        if eq.get("days_tracked", 0) >= 2:
+            out += [
+                "### Performance",
+                "",
+                f"- Total return: **{_pct(eq.get('total_return_pct'), 2)}** "
+                f"over {eq.get('days_tracked')} days tracked",
+                f"- Max drawdown: **{_pct(eq.get('max_drawdown_pct'), 2)}** "
+                f"({_money(eq.get('max_drawdown_amount'))})",
+                f"- Best / worst day: {_pct(eq.get('best_day_pct'), 2)} / "
+                f"{_pct(eq.get('worst_day_pct'), 2)}",
+            ]
+            if eq.get("annualised_return_pct") is not None:
+                out.append(f"- Annualised: {_pct(eq.get('annualised_return_pct'), 2)}")
+            if eq.get("sharpe") is not None:
+                out.append(f"- Sharpe: {eq['sharpe']:.2f}")
+            out.append("")
+        if tr.get("closed"):
+            out += [
+                f"- Closed trades: **{tr['closed']}** "
+                f"({tr.get('wins', 0)}W / {tr.get('losses', 0)}L, "
+                f"win rate {_pct(tr.get('win_rate_pct'))})",
+                f"- Profit factor: "
+                f"{tr['profit_factor']:.2f}" if tr.get("profit_factor") is not None
+                else "- Profit factor: n/a",
+                f"- Avg win / avg loss: {_money(tr.get('avg_win'))} / {_money(tr.get('avg_loss'))}",
+                "",
+            ]
+        for c in perf.get("caveats") or []:
+            out.append(f"> {c}")
+        if perf.get("caveats"):
+            out.append("")
 
     if growth and growth.get("applicable"):
         out += [

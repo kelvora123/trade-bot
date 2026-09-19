@@ -113,6 +113,50 @@ CREATE TABLE IF NOT EXISTS paper_fills (
     reason          TEXT DEFAULT ''
 );
 
+-- The simulated book. Paper fills accumulate here into real positions, which
+-- is what lets `tradebot run` mark a paper portfolio rather than a static file.
+CREATE TABLE IF NOT EXISTS paper_positions (
+    symbol          TEXT PRIMARY KEY,
+    ticker          TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    option_kind     TEXT,
+    strike          REAL,
+    expiry          TEXT,
+    qty             REAL NOT NULL,
+    avg_price       REAL NOT NULL,
+    multiplier      INTEGER NOT NULL DEFAULT 100,
+    target          REAL,
+    stop            REAL,
+    opened_at       TEXT NOT NULL,
+    realised_pnl    REAL NOT NULL DEFAULT 0,
+    -- Commission paid to open, carried until the position closes so a
+    -- round-trip's P&L reflects both legs' costs, not just the exit's.
+    entry_costs     REAL NOT NULL DEFAULT 0
+);
+
+-- Closed round-trips, kept separately so win rate and profit factor survive
+-- the position row being deleted at close.
+CREATE TABLE IF NOT EXISTS paper_trades (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol          TEXT NOT NULL,
+    ticker          TEXT NOT NULL,
+    opened_at       TEXT NOT NULL,
+    closed_at       TEXT NOT NULL,
+    qty             REAL NOT NULL,
+    entry_price     REAL NOT NULL,
+    exit_price      REAL NOT NULL,
+    multiplier      INTEGER NOT NULL,
+    pnl             REAL NOT NULL,
+    costs           REAL NOT NULL DEFAULT 0,
+    reason          TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS paper_cash (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    cash            REAL NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS paper_equity (
     asof            TEXT PRIMARY KEY,
     cash            REAL NOT NULL,
@@ -306,6 +350,78 @@ class Store:
                 "INSERT OR REPLACE INTO paper_equity (asof,cash,positions_value,equity) VALUES (?,?,?,?)",
                 (asof.isoformat(), float(cash), float(positions_value), float(equity)),
             )
+
+    def load_cash(self, default: float) -> float:
+        """Persisted cash balance, seeded from config on first use."""
+        row = self.conn.execute("SELECT cash FROM paper_cash WHERE id=1").fetchone()
+        if row is None:
+            self.save_cash(default, "seed")
+            return default
+        return float(row["cash"])
+
+    def save_cash(self, cash: float, updated_at: str) -> None:
+        with self.tx() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO paper_cash (id,cash,updated_at) VALUES (1,?,?)",
+                (float(cash), updated_at),
+            )
+
+    def get_position(self, symbol: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM paper_positions WHERE symbol=?", (symbol,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def all_positions(self) -> list[dict[str, Any]]:
+        cur = self.conn.execute("SELECT * FROM paper_positions ORDER BY ticker, symbol")
+        return [dict(r) for r in cur]
+
+    def upsert_position(self, **kw: Any) -> None:
+        cols = (
+            "symbol", "ticker", "kind", "option_kind", "strike", "expiry", "qty",
+            "avg_price", "multiplier", "target", "stop", "opened_at", "realised_pnl",
+            "entry_costs",
+        )
+        with self.tx() as c:
+            c.execute(
+                f"INSERT OR REPLACE INTO paper_positions ({','.join(cols)}) "
+                f"VALUES ({','.join('?' * len(cols))})",
+                tuple(kw.get(k) for k in cols),
+            )
+
+    def delete_position(self, symbol: str) -> None:
+        with self.tx() as c:
+            c.execute("DELETE FROM paper_positions WHERE symbol=?", (symbol,))
+
+    def record_trade(self, **kw: Any) -> None:
+        cols = (
+            "symbol", "ticker", "opened_at", "closed_at", "qty", "entry_price",
+            "exit_price", "multiplier", "pnl", "costs", "reason",
+        )
+        with self.tx() as c:
+            c.execute(
+                f"INSERT INTO paper_trades ({','.join(cols)}) "
+                f"VALUES ({','.join('?' * len(cols))})",
+                tuple(kw.get(k) for k in cols),
+            )
+
+    def closed_trades(self) -> list[dict[str, Any]]:
+        cur = self.conn.execute("SELECT * FROM paper_trades ORDER BY closed_at")
+        return [dict(r) for r in cur]
+
+    def history_coverage(self) -> list[dict[str, Any]]:
+        """Days of stored ATM-IV history per ticker -- progress toward IV rank."""
+        cur = self.conn.execute(
+            "SELECT ticker, COUNT(*) AS days, MIN(asof) AS first, MAX(asof) AS last "
+            "FROM underlying_iv_history GROUP BY ticker ORDER BY ticker"
+        )
+        return [dict(r) for r in cur]
+
+    def snapshot_count(self) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(DISTINCT asof || ticker) AS n FROM chain_snapshots"
+        ).fetchone()
+        return int(row["n"])
 
     def equity_curve(self) -> list[tuple[str, float]]:
         cur = self.conn.execute("SELECT asof, equity FROM paper_equity ORDER BY asof")

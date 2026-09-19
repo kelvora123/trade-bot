@@ -112,7 +112,23 @@ class PaperConfig:
     currency: str = "GBP"
     commission_per_contract: float = 0.65
     commission_per_share: float = 0.0
-    slippage_pct_of_spread: float = 0.5  # cross half the spread on a market order
+    # Fraction of the full bid-ask spread given up against you from mid.
+    # 0.5 fills at the touch (bid on a sell, ask on a buy), which is what a
+    # market order actually does. Lower values model price improvement.
+    slippage_pct_of_spread: float = 0.5
+
+
+@dataclass
+class ExecutionConfig:
+    """Execution mode. Paper is the only accepted value.
+
+    This exists so that "paper only" is a checked invariant rather than an
+    absence -- a live adapter added later cannot be switched on by editing a
+    config file alone, and both the config loader and PaperBroker reject
+    anything else.
+    """
+
+    mode: str = "paper"
 
 
 @dataclass
@@ -133,6 +149,7 @@ class Config:
     macro: MacroConfig = field(default_factory=MacroConfig)
     news: NewsConfig = field(default_factory=NewsConfig)
     paper: PaperConfig = field(default_factory=PaperConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
 
     root: Path = field(default=REPO_ROOT)
@@ -187,6 +204,11 @@ def load_config(path: str | Path | None = None, root: Path | None = None) -> Con
         if weights is not None:
             cfg.macro.weights = MacroWeights(**weights)
 
+    if cfg.execution.mode != "paper":
+        raise ValueError(
+            f"execution.mode must be 'paper' (got {cfg.execution.mode!r}). "
+            "This build ships no live-broker adapter; live trading is not supported."
+        )
     cfg.macro.weights.validate()
     if not 0 < cfg.allocation.ticker_concentration_cap <= 1:
         raise ValueError("allocation.ticker_concentration_cap must be in (0, 1]")

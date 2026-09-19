@@ -96,6 +96,27 @@ polling loop on `GET /actions/runs?status=in_progress`.
 
 ---
 
+## Paper-only operation
+
+Both workflows run the same paper-only pipeline. `tradebot run` values the
+persisted paper book, marks it to market, appends a point to the equity curve,
+and commits the result — so the nightly run is what builds the history that the
+IV-rank layer and the performance stats need.
+
+Two things worth knowing:
+
+- **Cash and positions persist in SQLite**, so the database must be committed
+  (or otherwise kept) between runs. The `daily-run.yml` Actions job commits
+  `data/` for exactly this reason; on a self-hosted runner the local checkout
+  keeps it naturally. Lose the database and you lose the equity curve and the
+  IV history with it.
+- **Trades are entered by hand**, with `tradebot buy` / `sell` / `close`.
+  Neither workflow opens or closes positions — they value and report only. That
+  is the same boundary the analytics layer keeps: it surfaces facts, and a
+  human decides.
+
+---
+
 ## Verifying
 
 ```bash
