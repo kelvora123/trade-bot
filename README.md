@@ -208,6 +208,72 @@ Pulls option chains, marks the book, computes Greeks.
 
 ---
 
+## Signals: computed, not prompted
+
+`tradebot propose` scores conditions, sizes the risk and constructs a candidate
+order. It makes **zero API calls**, because everything it produces is
+arithmetic over the stored price history.
+
+This layer is a deliberate port of the agent pipeline in
+[AutoHedge](https://github.com/The-Swarm-Corporation/AutoHedge) (MIT), which
+prompts GPT-4.1 agents to return `technical_score`, `volume_score`,
+`trend_strength`, `volatility`, `probability_score`, support/resistance levels,
+a position size and an entry/stop/target. Every one of those is computable from
+the price series, so this computes them:
+
+| AutoHedge | Here |
+|---|---|
+| Quant-Analyst agent → scores, volatility, key levels | `signals/quant.py` — EMA/RSI/ATR/Bollinger/Donchian arithmetic |
+| Risk-Manager agent → position size, drawdown, risk score | `signals/risk.py` — risk-per-trade sizing, historical VaR and Expected Shortfall |
+| Execution-Agent → order params, then **executes** | `signals/proposal.py` — constructs the order and **stops**; a human enters it |
+| Sentiment agent → headline reads | `layer3/news.py` — the one job that genuinely needs language; batched, cached, off by default |
+| **5 LLM calls per decision** | **0** |
+
+Asking a model for an RSI is strictly worse than computing one: it is
+non-reproducible, unverifiable, costs money per call, and can be wrong in ways
+nothing checks. A test asserts the whole pipeline is byte-identical across
+repeated runs — the property an agent chain cannot offer at any temperature.
+
+### Two things it deliberately does not do
+
+**It does not emit a probability.** AutoHedge's quant agent returns a
+`probability_score (0-1)`. A weighted blend of indicators is an *ordinal score*,
+not a calibrated probability, and sizing against it as though it were one is
+how accounts die. This emits `conviction` and says in the payload exactly what
+it is. Separately, where there are at least 10 historical instances of the same
+trend state, it reports `measured_hit_rate` — an observed frequency from the
+series' own history, with its sample count attached.
+
+**It does not execute.** AutoHedge places the order. Here the output is a
+proposal, printed with the exact `tradebot buy` command that would enter it.
+The build is paper-only and the signal layer holds no broker handle.
+
+### Sizing rule
+
+Position size comes from **risk-per-trade**, not a notional percentage: size so
+that price reaching the stop costs a fixed fraction of equity (default 1%).
+That makes a stopped trade cost the same whatever the instrument or its
+volatility — the property that actually keeps an account alive. A notional cap
+(25%) and a portfolio-heat cap (6% total open risk) sit on top, and the output
+always names which constraint bound the size. When no size clears every
+constraint it returns **zero with the reason**, rather than a token position
+that quietly breaches a limit.
+
+```
+$ tradebot propose --tickers NVDA,AAPL --equity 25000
+
+  NVDA     no trade
+      blocked: Realised volatility 202% exceeds the 150% ceiling; no size recommended.
+
+  AAPL     PROPOSE
+    long 16 @ 238.2000  stop 223.3932  target 267.8137  R:R 2
+      - Trend long on the 20/50 EMA stack (score 0.78)
+      - Size 16 risks 236.91 (0.95% of equity), bound by risk_per_trade
+    enter it with:  tradebot buy AAPL --qty 16 --price 238.2000 --shares ...
+```
+
+---
+
 ## How Claude usage is minimised
 
 The reference design runs **one API call per held name per day**. This one does
@@ -262,6 +328,7 @@ tradebot run --no-news          # full pipeline, zero API cost
 | `tradebot close SYM --price P` | Close an open paper position in full |
 | `tradebot status` | Book, performance, and history progress |
 | `tradebot dashboard` | Re-render the HTML dashboard from a stored run |
+| `tradebot propose` | Deterministic trade proposals — no LLM, no execution |
 | `tradebot value` | Layer 1 only, as JSON |
 | `tradebot macro` | The deterministic macro gate only (free) |
 | `tradebot paper --check-affordable SYM --qty 1 --mark 13.0` | Prices a hypothetical order |
@@ -318,7 +385,7 @@ if n8n is down.
 ## Testing
 
 ```bash
-pytest -q                    # 131 tests, fully offline
+pytest -q                    # 172 tests, fully offline
 ruff check src tests scripts
 python scripts/validate_n8n.py
 ```
@@ -351,6 +418,7 @@ src/tradebot/
   layer1/  blackscholes.py  provider.py  snapshots.py  valuation.py
   layer2/  analytics.py
   layer3/  macro.py  news.py
+  signals/ indicators.py  quant.py  risk.py  proposal.py
   paper/   book.py  broker.py  performance.py
   report/  render.py  dashboard.py
   cli.py

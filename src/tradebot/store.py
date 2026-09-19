@@ -66,6 +66,20 @@ CREATE TABLE IF NOT EXISTS spot_history (
     PRIMARY KEY (asof, ticker)
 );
 
+-- Daily OHLCV per underlying. Closes alone cannot produce a true range, so
+-- ATR-based stops and Donchian breakouts need highs and lows stored too.
+CREATE TABLE IF NOT EXISTS ohlcv_history (
+    asof            TEXT NOT NULL,
+    ticker          TEXT NOT NULL,
+    open            REAL NOT NULL,
+    high            REAL NOT NULL,
+    low             REAL NOT NULL,
+    close           REAL NOT NULL,
+    volume          REAL,
+    PRIMARY KEY (asof, ticker)
+);
+CREATE INDEX IF NOT EXISTS ix_ohlcv_ticker ON ohlcv_history (ticker, asof);
+
 CREATE TABLE IF NOT EXISTS runs (
     asof            TEXT NOT NULL,
     layer           TEXT NOT NULL,
@@ -268,6 +282,26 @@ class Store:
             (ticker, asof.isoformat(), asof.isoformat(), f"-{int(lookback_days)} days"),
         )
         return [float(r["atm_iv"]) for r in cur]
+
+    def record_ohlcv(self, asof: date, ticker: str, o: float, h: float, low: float,
+                     c: float, volume: float | None = None) -> None:
+        if h < low:
+            raise ValueError(f"{ticker} {asof}: high {h} below low {low}")
+        with self.tx() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO ohlcv_history (asof,ticker,open,high,low,close,volume) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (asof.isoformat(), ticker, float(o), float(h), float(low), float(c), volume),
+            )
+
+    def ohlcv(self, ticker: str, asof: date, lookback_days: int) -> list[dict[str, Any]]:
+        """Daily bars within the lookback window, oldest first."""
+        cur = self.conn.execute(
+            "SELECT asof,open,high,low,close,volume FROM ohlcv_history "
+            "WHERE ticker=? AND asof<=? AND asof>=date(?, ?) ORDER BY asof",
+            (ticker, asof.isoformat(), asof.isoformat(), f"-{int(lookback_days)} days"),
+        )
+        return [dict(r) for r in cur]
 
     def record_spot(self, asof: date, ticker: str, close: float) -> None:
         with self.tx() as c:

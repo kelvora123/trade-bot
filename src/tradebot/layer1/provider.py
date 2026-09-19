@@ -31,6 +31,7 @@ class MarketDataProvider(Protocol):
     def sector(self, ticker: str) -> str | None: ...
     def headlines(self, ticker: str, lookback_days: int) -> list[dict]: ...
     def history_closes(self, ticker: str, lookback_days: int) -> list[tuple[date, float]]: ...
+    def history_ohlcv(self, ticker: str, lookback_days: int) -> list[dict]: ...
 
 
 def _f(value: object) -> float | None:
@@ -189,6 +190,22 @@ class YFinanceProvider:
             return []
         return [(idx.date(), float(row["Close"])) for idx, row in hist.iterrows()]
 
+    def history_ohlcv(self, ticker: str, lookback_days: int) -> list[dict]:
+        try:
+            hist = self._ticker(ticker).history(period=f"{max(lookback_days, 5)}d", auto_adjust=False)
+        except Exception as exc:
+            log.warning("ohlcv history failed for %s: %s", ticker, exc)
+            return []
+        out = []
+        for idx, row in hist.iterrows():
+            bar = {k: _f(row.get(k.capitalize() if k != "volume" else "Volume"))
+                   for k in ("open", "high", "low", "close", "volume")}
+            if None in (bar["open"], bar["high"], bar["low"], bar["close"]):
+                continue
+            bar["asof"] = idx.date().isoformat()
+            out.append(bar)
+        return out
+
 
 class OfflineProvider:
     """Replays chains and spots already in SQLite. No network at all."""
@@ -240,3 +257,6 @@ class OfflineProvider:
             (ticker, self.asof.isoformat(), self.asof.isoformat(), f"-{int(lookback_days)} days"),
         )
         return [(date.fromisoformat(r["asof"]), float(r["close"])) for r in cur]
+
+    def history_ohlcv(self, ticker: str, lookback_days: int) -> list[dict]:
+        return self.store.ohlcv(ticker, self.asof, lookback_days)

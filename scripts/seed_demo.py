@@ -131,7 +131,18 @@ def main() -> int:
                 px *= 1 + RNG.gauss(0.0012, vol / math.sqrt(252))
                 store.record_underlying_iv(d, ticker, round(vol, 4), round(px, 2))
                 store.record_spot(d, ticker, round(px, 2))
+                # Daily OHLCV, so the deterministic signal layer has true
+                # ranges to work with rather than closes alone.
+                intraday = vol / math.sqrt(252)
+                hi = px * (1 + abs(RNG.gauss(0, intraday)))
+                lo = px * (1 - abs(RNG.gauss(0, intraday)))
+                op = lo + (hi - lo) * RNG.random()
+                store.record_ohlcv(d, ticker, round(op, 2), round(max(hi, px), 2),
+                                   round(min(lo, px), 2), round(px, 2),
+                                   RNG.randint(2_000_000, 40_000_000))
             store.record_spot(ASOF, ticker, spot)
+            store.record_ohlcv(ASOF, ticker, spot * 0.997, spot * 1.008, spot * 0.992,
+                               spot, RNG.randint(2_000_000, 40_000_000))
 
         # --- today's chains -------------------------------------------------
         expiries = sorted({e for _, _, _, _, e, *_ in BOOK if e})

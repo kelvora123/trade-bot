@@ -31,6 +31,10 @@ from .paper.performance import compute_performance, history_progress
 from .portfolio import load_portfolio, load_sectors
 from .report.dashboard import render_standalone
 from .report.render import growth_math, render_markdown, write_reports
+from .signals.proposal import build_proposal
+from .signals.quant import analyse as quant_analyse
+from .signals.risk import RiskConfig
+from .signals.risk import assess as risk_assess
 from .store import Store
 from .types import AssetKind, Holding, OptionKind, today_utc, utcnow
 
@@ -88,6 +92,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         diffs: list[dict[str, Any]] = []
         for ticker in tickers:
             spots[ticker] = provider.spot(ticker)
+            if not args.offline:
+                for bar in provider.history_ohlcv(ticker, 400):
+                    try:
+                        store.record_ohlcv(
+                            date.fromisoformat(bar["asof"]), ticker, bar["open"],
+                            bar["high"], bar["low"], bar["close"], bar.get("volume"),
+                        )
+                    except (ValueError, KeyError) as exc:
+                        log.debug("skipped bar for %s: %s", ticker, exc)
             wanted = sorted({h.expiry for h in holdings if h.ticker == ticker and h.expiry})
             rows = provider.chain(ticker, wanted or None)
             chains[ticker] = rows
@@ -300,6 +313,106 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_propose(args: argparse.Namespace) -> int:
+    """Score conditions, size the risk, and print a candidate order.
+
+    This is the deterministic pipeline that replaces a chain of LLM agents:
+    quant scoring, risk assessment and order construction are all arithmetic
+    over the stored price history. No API is called, and nothing is executed --
+    the output is a proposal a human enters by hand.
+    """
+    cfg = load_config(args.config, root=args.root)
+    asof = date.fromisoformat(args.asof) if args.asof else today_utc()
+    rcfg = RiskConfig(
+        risk_per_trade_pct=args.risk_pct / 100.0,
+        atr_stop_multiple=args.atr_mult,
+        reward_multiple=args.reward,
+    )
+
+    with Store(cfg.path("database")) as store:
+        provider = _build_provider(args, store, asof)
+        broker = PaperBroker(cfg, store)
+        equity = args.equity if args.equity else broker.cash + sum(
+            abs(p["qty"] * p["avg_price"] * p["multiplier"]) for p in store.all_positions()
+        )
+
+        if args.tickers:
+            tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
+        else:
+            tickers = sorted({p["ticker"] for p in store.all_positions()})
+            if not tickers:
+                log.error("no tickers given and the paper book is empty; pass --tickers")
+                return 1
+
+        results = []
+        for ticker in tickers:
+            bars = provider.history_ohlcv(ticker, args.lookback)
+            if not bars and not args.offline:
+                bars = store.ohlcv(ticker, asof, args.lookback)
+            if len(bars) < 30:
+                results.append({
+                    "ticker": ticker,
+                    "action": "no_trade",
+                    "blocks": [
+                        f"Only {len(bars)} daily bars stored for {ticker}; 30 are needed. "
+                        "Run `tradebot run` (online) on a few sessions to accumulate history."
+                    ],
+                })
+                continue
+
+            quant = quant_analyse(ticker, bars, asof.isoformat())
+            closes = [float(b["close"]) for b in bars]
+            if quant.close is None or quant.atr is None:
+                results.append({"ticker": ticker, "action": "no_trade",
+                                "blocks": ["No usable price or ATR."]})
+                continue
+
+            stop_dist = quant.atr * rcfg.atr_stop_multiple
+            stop = (quant.close - stop_dist if quant.direction == "long"
+                    else quant.close + stop_dist)
+            risk = risk_assess(ticker, closes, equity, quant.close, stop, rcfg,
+                               quant.volatility_annualised)
+            proposal = build_proposal(quant, risk, rcfg, args.min_conviction)
+            entry = proposal.to_json()
+            entry["quant"] = quant.to_json()
+            entry["risk"] = risk.to_json()
+            entry["command"] = proposal.as_command()
+            results.append(entry)
+
+    payload = {
+        "asof": asof.isoformat(),
+        "equity_used": round(equity, 2),
+        "llm_calls": 0,
+        "method": "deterministic: indicator arithmetic and risk sizing, no model inference",
+        "proposals": results,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, default=str))
+    else:
+        _print_proposals(payload)
+    return 0
+
+
+def _print_proposals(payload: dict[str, Any]) -> None:
+    print(f"\nProposals for {payload['asof']}  (equity {payload['equity_used']:,.2f}, "
+          f"{payload['llm_calls']} LLM calls)\n")
+    for r in payload["proposals"]:
+        mark = "PROPOSE" if r.get("action") == "propose" else "no trade"
+        print(f"  {r['ticker']:<8} {mark}")
+        if r.get("action") == "propose":
+            print(f"    {r['direction']} {r['qty']} @ {r['entry']:,.4f}  "
+                  f"stop {r['stop']:,.4f}  target {r['target']:,.4f}  "
+                  f"R:R {r['reward_to_risk']:g}")
+            for line in r.get("rationale", []):
+                print(f"      - {line}")
+            if r.get("command"):
+                print(f"    enter it with:  {r['command']}")
+        for b in r.get("blocks", []):
+            print(f"      blocked: {b}")
+        print()
+    print("  Proposals only. Nothing has been ordered; this build has no broker adapter.\n")
+
+
 def cmd_value(args: argparse.Namespace) -> int:
     """Layer 1 only."""
     cfg = load_config(args.config, root=args.root)
@@ -444,6 +557,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("status", help="paper book, performance, and history progress")
     st.set_defaults(func=cmd_status)
+
+    prop = sub.add_parser("propose", help="deterministic trade proposals (no LLM, no execution)")
+    prop.add_argument("--tickers", help="comma-separated; defaults to the paper book's tickers")
+    prop.add_argument("--equity", type=float, help="override the account equity used for sizing")
+    prop.add_argument("--risk-pct", type=float, default=1.0, help="%% of equity at risk if stopped")
+    prop.add_argument("--atr-mult", type=float, default=2.0, help="stop distance in ATR units")
+    prop.add_argument("--reward", type=float, default=2.0, help="target as a multiple of risk")
+    prop.add_argument("--min-conviction", type=float, default=0.55)
+    prop.add_argument("--lookback", type=int, default=400, help="days of history to score")
+    prop.add_argument("--json", action="store_true")
+    prop.set_defaults(func=cmd_propose)
 
     dash = sub.add_parser("dashboard", help="render the HTML dashboard from a stored run")
     dash.add_argument("--source", help="run JSON to render (default: reports/latest.json)")
