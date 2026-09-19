@@ -1,0 +1,14 @@
+# Ticker -> sector. Checked before the provider's own metadata.
+sectors:
+  NVDA: Technology
+  AMD: Technology
+  AAPL: Technology
+  MSFT: Technology
+  GOOGL: Communication Services
+  META: Communication Services
+  AMZN: Consumer Cyclical
+  TSLA: Consumer Cyclical
+  JPM: Financial Services
+  XOM: Energy
+  SPY: Index
+  QQQ: Index
