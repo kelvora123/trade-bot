@@ -1,0 +1,72 @@
+name: Daily portfolio run
+
+# Dispatched by the n8n workflow (n8n/workflows/dispatch-github-actions.json),
+# and on a schedule as a backstop if n8n is down.
+on:
+  workflow_dispatch:
+    inputs:
+      enable_news:
+        description: "Run the Claude news layer (costs API tokens)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 22 * * 1-5"   # 22:00 UTC, weekdays
+
+permissions:
+  contents: write            # needed to commit the run's snapshots and reports
+
+concurrency:
+  group: daily-run
+  cancel-in-progress: false  # never interrupt a run mid-commit
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[llm]"
+
+      - name: Run the pipeline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ "${{ inputs.enable_news }}" = "true" ]; then
+            python -m tradebot.cli run
+          else
+            python -m tradebot.cli run --no-news
+          fi
+
+      - name: Report LLM spend to date
+        run: python -m tradebot.cli usage
+
+      - name: Commit snapshots and reports
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # -f because reports/ and snapshots/ are gitignored for local runs;
+          # in CI the accumulated history is the point.
+          git add -f snapshots/ reports/ data/ 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "data: portfolio run $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: portfolio-report
+          path: reports/
+          retention-days: 30

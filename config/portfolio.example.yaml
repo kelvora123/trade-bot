@@ -1,0 +1,24 @@
+# Copy to config/portfolio.yaml and edit. Not tracked by git.
+#
+# qty         : shares, or CONTRACTS for options (negative = short)
+# cost_basis  : per share -- for an option, the quoted premium, NOT premium x 100
+# target/stop : price levels on the same per-share scale, used for progress %
+
+holdings:
+  - ticker: NVDA
+    kind: option
+    option_kind: call
+    qty: 2
+    strike: 180.0
+    expiry: 2026-01-16
+    cost_basis: 12.50
+    target: 25.00
+    stop: 6.00
+    note: "Example only."
+
+  - ticker: AAPL
+    kind: shares
+    qty: 10
+    cost_basis: 225.40
+    target: 280.00
+    stop: 195.00

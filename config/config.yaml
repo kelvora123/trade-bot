@@ -1,0 +1,52 @@
+# Every value here matches the layer-spec defaults. Change what you need.
+
+valuation:
+  risk_free_rate: 0.045      # annual, decimal
+  dividend_yield: 0.0
+  wide_spread_pct: 0.15      # warn when bid-ask exceeds this fraction of mark
+
+allocation:
+  ticker_concentration_cap: 0.40   # warn above 40% in one ticker
+  sector_concentration_cap: 0.60   # warn above 60% in one sector
+
+iv_env:
+  rank_lookback_days: 252    # ~1 trading year
+  min_history_days: 20       # below this, IV rank reports "building history"
+  rich_threshold: 70.0
+  cheap_threshold: 30.0
+
+expiry:
+  dte_watch_threshold: 45    # surface decay/roll decisions inside this window
+
+macro:
+  enabled: true
+  vix_percentile_lookback_days: 252
+  weights:                   # must sum to exactly 1.0
+    vix_level: 0.30
+    vix_percentile: 0.20
+    vix_term_structure: 0.20
+    breadth: 0.20
+    credit_spread: 0.10
+
+news:
+  # Off by default. The rest of the system runs, and costs nothing, without it.
+  enabled: false
+  lookback_days: 3
+  model: claude-haiku-4-5    # bulk extraction; claude-opus-5 for the stronger model
+  max_headlines_per_ticker: 8
+  batch_all_tickers: true    # one call for the whole book, not one per name
+  max_calls_per_day: 4       # hard cap; the layer degrades rather than overspend
+  max_output_tokens: 2000
+
+paper:
+  starting_cash: 100.0
+  currency: GBP
+  commission_per_contract: 0.65
+  slippage_pct_of_spread: 0.5   # a market order crosses half the spread
+
+paths:
+  snapshots_dir: snapshots
+  reports_dir: reports
+  database: data/tradebot.sqlite
+  portfolio: config/portfolio.yaml
+  sectors: config/sectors.yaml
