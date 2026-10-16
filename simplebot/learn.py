@@ -173,6 +173,14 @@ def refit(
     }
 
 
+def decider_description(cfg: Config) -> str:
+    d = cfg.decider
+    if d.provider == "none":
+        return "none"
+    model = d.model if d.provider == "claude" else d.ollama_model
+    return f"{d.provider}:{model}:{d.role}"
+
+
 def paper_days_with_trades(journal: Journal) -> int:
     daily = journal.daily()
     return int((daily["trades"] > 0).sum()) if len(daily) else 0
@@ -193,6 +201,11 @@ def live_gate(
             problems.append("out-of-sample backtest does not beat buy-and-hold on Sharpe")
         if result.params != {**default_params(load_strategy(cfg.strategy)), **cfg.params}:
             problems.append("config params differ from the backtested params; re-run the backtest")
+        if result.decider != decider_description(cfg):
+            problems.append(
+                f"backtest used decider '{result.decider}' but config says"
+                f" '{decider_description(cfg)}'; re-run the backtest (--llm)"
+            )
     paper = Journal(journal.path, mode="paper") if journal.mode != "paper" else journal
     daily = paper.daily()
     days = int((daily["trades"] > 0).sum()) if len(daily) else 0

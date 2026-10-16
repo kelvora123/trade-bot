@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS params_history (
   id INTEGER PRIMARY KEY, ts TEXT, strategy TEXT, old_params TEXT, new_params TEXT,
   stats TEXT, source TEXT, applied INTEGER);
 CREATE TABLE IF NOT EXISTS coach_notes (id INTEGER PRIMARY KEY, ts TEXT, note TEXT);
-CREATE TABLE IF NOT EXISTS coach_spend (date TEXT PRIMARY KEY, usd REAL);
+CREATE TABLE IF NOT EXISTS llm_spend (date TEXT, component TEXT, usd REAL,
+  PRIMARY KEY (date, component));
 """
 
 
@@ -194,18 +195,25 @@ class Journal:
         ).fetchall()
         return [{"ts": r[0], **json.loads(r[1])} for r in rows]
 
-    def coach_spend_today(self, day: date | None = None) -> float:
+    def llm_spend_today(self, component: str, day: date | None = None) -> float:
         day = day or datetime.now(UTC).date()
         row = self.conn.execute(
-            "SELECT usd FROM coach_spend WHERE date = ?", (day.isoformat(),)
+            "SELECT usd FROM llm_spend WHERE date = ? AND component = ?",
+            (day.isoformat(), component),
         ).fetchone()
         return float(row[0]) if row else 0.0
 
-    def add_coach_spend(self, usd: float, day: date | None = None) -> None:
+    def add_llm_spend(self, component: str, usd: float, day: date | None = None) -> None:
         day = day or datetime.now(UTC).date()
         self.conn.execute(
-            "INSERT INTO coach_spend (date, usd) VALUES (?, ?)"
-            " ON CONFLICT(date) DO UPDATE SET usd = usd + excluded.usd",
-            (day.isoformat(), float(usd)),
+            "INSERT INTO llm_spend (date, component, usd) VALUES (?, ?, ?)"
+            " ON CONFLICT(date, component) DO UPDATE SET usd = usd + excluded.usd",
+            (day.isoformat(), component, float(usd)),
         )
         self.conn.commit()
+
+    def coach_spend_today(self, day: date | None = None) -> float:
+        return self.llm_spend_today("coach", day)
+
+    def add_coach_spend(self, usd: float, day: date | None = None) -> None:
+        self.add_llm_spend("coach", usd, day)

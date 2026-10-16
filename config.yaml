@@ -44,6 +44,21 @@ coach:
   auto_apply_params: false         # true = param proposals that pass the gate are applied without a human
   max_daily_cost_usd: 0.50
 
+# Claude (or a local model) making buy/sell decisions INSIDE the trading loop. Off by default.
+# This suspends hard rule 2. Sizing, stops, the daily loss stop and the end-of-day flatten
+# stay in code whatever the model says. Costs money per decision; see README "Claude in the loop".
+decider:
+  provider: none                   # none | claude | ollama
+  role: last_resort                # last_resort (rules first, model when they have nothing) | final_say (model approves/rejects every rule signal) | primary (model decides every every_minutes)
+  model: claude-opus-5-5
+  ollama_model: llama3.1:8b
+  every_minutes: 30                # how often the model is consulted per symbol (last_resort/primary)
+  max_stop_pct: 2.0                # the model's stop may be at most this far from the price
+  min_confidence: 0.6              # answers below this are treated as hold
+  max_daily_cost_usd: 2.00         # once reached the model is not asked again that day (hold)
+  effort: medium                   # low | medium | high (Claude only; lower = faster, cheaper)
+  timeout_seconds: 30
+
 # Map your symbols to broker tickers when the broker uses different names (Trading 212 uses e.g. AAPL_US_EQ).
 symbol_map: {}
 

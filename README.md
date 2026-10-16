@@ -29,6 +29,10 @@ that must pass a backtest gate before anything is applied.
 - A learning loop: a deterministic walk-forward re-fit, plus an optional AI coach
   (Claude via the Anthropic API, or a local model via Ollama) whose proposals are gated by
   the backtest and never touch your risk settings.
+- Optional, off by default: Claude (or a local model) making buy and sell decisions inside
+  the trading loop, as a last resort when the rules have nothing, as a final say on every rule
+  signal, or as the primary decider. Sizing, stops, the daily loss stop and the end-of-day
+  flatten stay in code whatever it says. See "Claude in the loop".
 - `live`: only unlocks when `mode: live` is set **and** `SIMPLEBOT_LIVE_CONFIRM=yes` is in
   `.env` **and** the strategy has passed Rule 6 (beats buy-and-hold out of sample after costs
   and has 20+ paper days within the expected range).
@@ -100,6 +104,7 @@ timer for the coach, a Dockerfile and a compose file.
 | `data.*` | Provider (`yahoo`, `alpaca`, `csv`, `synthetic`), lookback days, cache dir. |
 | `learning.*` | Re-fit cadence and the gate thresholds (minimum out-of-sample trades, minimum Sharpe gain). |
 | `coach.*` | `provider` (`none`, `claude`, `ollama`), model names, lookback, `auto_apply_params`, daily cost cap. |
+| `decider.*` | Claude in the trading loop: `provider`, `role` (`last_resort`, `final_say`, `primary`), model, `every_minutes`, `max_stop_pct`, `min_confidence`, `max_daily_cost_usd`, `effort`, `timeout_seconds`. |
 | `symbol_map` | Your symbol to the broker's ticker, e.g. `{EQQQ.L: EQQQl_EQ}`. |
 | `poll_seconds`, `journal_path`, `reports_dir`, `telegram` | Plumbing. |
 
@@ -197,6 +202,51 @@ process (never from the trading process):
 A coach cannot turn a losing edge into a winning one. It finds and tests hypotheses faster than
 you would. Most proposals should be rejected; that is the system working.
 
+## Claude in the loop (optional, off by default)
+
+This suspends hard rule 2 on purpose, at the owner's request. Set `decider.provider: claude`
+(or `ollama`) and pick a role:
+
+| `decider.role` | What happens |
+|---|---|
+| `last_resort` (default) | The rule-based strategy decides whenever it has a signal. Only when it has nothing is the model asked, at most every `every_minutes` per symbol, whether to buy, sell or hold. |
+| `final_say` | Every rule-based signal is sent to the model, which approves it, rejects it, or tightens the stop and target. The model never initiates a trade. |
+| `primary` | The model is asked every `every_minutes` whether to buy, sell, close or hold, with the rule-based signal shown as advice. It can also close an open position early. |
+
+What the model sees: today's bars, the last ten daily bars, VWAP, the opening range, ATR, the
+open position, the rule-based signal, the account state, the risk limits and the round-trip
+cost. What it answers: one structured JSON object with `action`, `stop_price`, `target_price`,
+`confidence` and a one-line `reason`. Every answer is journaled with its cost.
+
+What stays in code no matter what the model says:
+
+- position size from `risk_per_trade_pct` and the stop, capped by cash;
+- the stop must be on the correct side of the price and no further than `max_stop_pct`;
+  anything else is treated as hold; a stop that is too wide is tightened;
+- answers below `min_confidence` are hold;
+- the daily loss stop, max positions, max entries per day, `allow_short` and the end-of-day
+  flatten all apply to the model's trades exactly as to the rules';
+- once `max_daily_cost_usd` is spent the model is not asked again that day;
+- any error, timeout, refusal or unreadable answer means hold. The model never sees broker keys
+  and `decider.py` cannot import the broker modules (a test enforces it).
+
+Costs and speed: one decision is roughly 3,500 input tokens. On `claude-opus-5-5` that is about
+2 cents per call, so the default cadence of 30 minutes on two symbols is about 50 cents a
+trading day; `claude-sonnet-5-5` halves it and `claude-haiku-5-5` is near free. Each call takes
+a few seconds, which is fine for a loop that polls every 30 seconds.
+
+Backtesting it: `python -m simplebot backtest --llm --max-llm-cost 5` consults the model over
+the out-of-sample period only. The command prints the estimated number of calls and cost first
+and stops asking once the cap is hit. It is slow (every call is a real API round trip) and
+not deterministic: two runs give different trades. Rule 6 still applies: `check` compares the
+decider setting used in the saved backtest with the one in `config.yaml`, so a model-driven
+configuration has to earn its way to live like any other.
+
+Be clear-eyed about what this is. A language model reading a table of bars has no information
+edge over the rules, it adds latency and cost per decision, and it cannot be replayed. The
+honest reason to run it is to find out, on the demo account, whether it does better than the
+rules after costs. The journal and the daily summary will tell you.
+
 ## Going live
 
 1. Run `python -m simplebot check`. It prints whether Rule 6 is met: a saved backtest for the
@@ -292,7 +342,8 @@ docs/RESEARCH.md            Step 0 research with sources
 ## The hard rules
 
 1. Paper first. Live needs `mode: live` and `SIMPLEBOT_LIVE_CONFIRM=yes`.
-2. No LLM calls in the trading loop. The coach runs after the close and only proposes.
+2. No LLM calls in the trading loop unless you set `decider.provider`. Even then sizing, stops,
+   the daily loss stop and the flatten stay in code, and the coach still only proposes.
 3. Costs are always on. There is no gross-only number anywhere.
 4. Risk limits are enforced in code, not in the strategy.
 5. Secrets only from `.env`; a pre-commit scan blocks keys.

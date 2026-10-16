@@ -15,6 +15,7 @@ VALID_BROKERS = ("paper", "trading212", "ibkr")
 VALID_ACCOUNTS = ("invest", "isa")
 VALID_PROVIDERS = ("yahoo", "alpaca", "csv", "synthetic")
 VALID_COACH_PROVIDERS = ("none", "claude", "ollama")
+VALID_DECIDER_ROLES = ("last_resort", "final_say", "primary")
 TIMEFRAME_RE = re.compile(r"^(\d+)m$")
 
 # Keys under `risk:` are owned by the human. Nothing automated may change them.
@@ -70,6 +71,22 @@ class CoachConfig:
 
 
 @dataclass
+class DeciderConfig:
+    """An LLM making buy/sell decisions inside the trading loop. Off unless provider is set."""
+
+    provider: str = "none"
+    role: str = "last_resort"
+    model: str = "claude-opus-5-5"
+    ollama_model: str = "llama3.1:8b"
+    every_minutes: int = 30
+    max_stop_pct: float = 2.0
+    min_confidence: float = 0.6
+    max_daily_cost_usd: float = 2.0
+    effort: str = "medium"
+    timeout_seconds: float = 30.0
+
+
+@dataclass
 class Config:
     mode: str = "paper"
     broker: str = "paper"
@@ -86,6 +103,7 @@ class Config:
     data: DataConfig = field(default_factory=DataConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
     coach: CoachConfig = field(default_factory=CoachConfig)
+    decider: DeciderConfig = field(default_factory=DeciderConfig)
     symbol_map: dict[str, str] = field(default_factory=dict)
     poll_seconds: int = 30
     journal_path: str = "simplebot.sqlite"
@@ -140,6 +158,7 @@ def from_dict(raw: dict[str, Any], path: str = "config.yaml") -> Config:
         data=_build(DataConfig, raw.get("data"), "data"),
         learning=_build(LearningConfig, raw.get("learning"), "learning"),
         coach=_build(CoachConfig, raw.get("coach"), "coach"),
+        decider=_build(DeciderConfig, raw.get("decider"), "decider"),
         symbol_map={str(k).upper(): str(v) for k, v in (raw.get("symbol_map") or {}).items()},
         poll_seconds=int(raw.get("poll_seconds", 30)),
         journal_path=str(raw.get("journal_path", "simplebot.sqlite")),
@@ -166,6 +185,17 @@ def validate(cfg: Config) -> None:
         raise ConfigError(f"data.provider must be one of {VALID_PROVIDERS}")
     if cfg.coach.provider not in VALID_COACH_PROVIDERS:
         raise ConfigError(f"coach.provider must be one of {VALID_COACH_PROVIDERS}")
+    d = cfg.decider
+    if d.provider not in VALID_COACH_PROVIDERS:
+        raise ConfigError(f"decider.provider must be one of {VALID_COACH_PROVIDERS}")
+    if d.role not in VALID_DECIDER_ROLES:
+        raise ConfigError(f"decider.role must be one of {VALID_DECIDER_ROLES}")
+    if d.every_minutes < 1 or not (0 < d.max_stop_pct <= 10) or not (0 <= d.min_confidence <= 1):
+        raise ConfigError(
+            "decider: every_minutes >= 1, 0 < max_stop_pct <= 10, 0 <= min_confidence <= 1"
+        )
+    if d.effort not in ("low", "medium", "high"):
+        raise ConfigError("decider.effort must be low, medium or high")
     r = cfg.risk
     if not (0 < r.risk_per_trade_pct <= 5):
         raise ConfigError("risk.risk_per_trade_pct must be between 0 and 5 (percent)")

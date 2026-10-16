@@ -34,3 +34,10 @@ def test_coach_requires_provider(cfg):
 
 def test_bad_config_path():
     assert main(["--config", "/nonexistent.yaml", "check"]) == 2
+
+
+def test_backtest_llm_flag_needs_provider(cfg):
+    assert (
+        main(["--config", cfg.path, "backtest", "--data", "synthetic", "--days", "12", "--llm"])
+        == 2
+    )

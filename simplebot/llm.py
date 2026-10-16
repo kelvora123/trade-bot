@@ -73,6 +73,7 @@ class ClaudeLLM:
         api_key: str | None = None,
         client=None,
         max_tokens: int = 8000,
+        timeout: float = 120.0,
     ) -> None:
         self.model = model
         self.max_tokens = max_tokens
@@ -84,16 +85,21 @@ class ClaudeLLM:
             key = api_key or os.environ.get("ANTHROPIC_API_KEY")
             if not key:
                 raise LLMError("ANTHROPIC_API_KEY is not set in .env")
-            client = anthropic.Anthropic(api_key=key)
+            client = anthropic.Anthropic(api_key=key, timeout=timeout, max_retries=1)
         self.client = client
 
-    def complete(self, system: str, user: str, schema: dict[str, Any]) -> LLMResult:
+    def complete(
+        self, system: str, user: str, schema: dict[str, Any], effort: str | None = None
+    ) -> LLMResult:
+        output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
+        if effort:
+            output_config["effort"] = effort
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,
             messages=[{"role": "user", "content": user}],
-            output_config={"format": {"type": "json_schema", "schema": schema}},
+            output_config=output_config,
         )
         usage = getattr(resp, "usage", None)
         tokens_in = int(getattr(usage, "input_tokens", 0) or 0)
@@ -133,7 +139,9 @@ class OllamaLLM:
         self.session = session or requests.Session()
         self.timeout = timeout
 
-    def complete(self, system: str, user: str, schema: dict[str, Any]) -> LLMResult:
+    def complete(
+        self, system: str, user: str, schema: dict[str, Any], effort: str | None = None
+    ) -> LLMResult:
         body = {
             "model": self.model,
             "messages": [
@@ -161,12 +169,21 @@ class OllamaLLM:
         )
 
 
-def make_llm(cfg: Config, provider: str | None = None):
-    provider = provider or cfg.coach.provider
+def make_llm(cfg: Config, provider: str | None = None, component: str = "coach"):
+    """Build the client for the coach (default) or the in-loop decider."""
+    section = cfg.decider if component == "decider" else cfg.coach
+    provider = provider or section.provider
     if provider == "claude":
-        return ClaudeLLM(model=cfg.coach.model)
+        timeout = getattr(section, "timeout_seconds", 120.0)
+        return ClaudeLLM(
+            model=section.model,
+            timeout=timeout,
+            max_tokens=2000 if component == "decider" else 8000,
+        )
     if provider == "ollama":
-        return OllamaLLM(model=cfg.coach.ollama_model)
+        return OllamaLLM(
+            model=section.ollama_model, timeout=getattr(section, "timeout_seconds", 600.0)
+        )
     if provider == "none":
         return None
-    raise LLMError(f"unknown coach provider {provider!r}")
+    raise LLMError(f"unknown {component} provider {provider!r}")

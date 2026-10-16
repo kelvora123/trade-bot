@@ -61,6 +61,7 @@ class BacktestResult:
     bench_equity: dict[str, pd.Series]
     params_history: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    decider: str = "none"
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     @property
@@ -132,6 +133,7 @@ def run_period(
     bars_by_symbol: dict[str, pd.DataFrame],
     days: list[date],
     journal: Journal | None = None,
+    decider=None,
 ) -> tuple[Engine, pd.DataFrame, pd.Series]:
     """Drive the engine over `days`, giving each strategy call up to HISTORY_SESSIONS of
     history before the first active day. Returns (engine, trades, equity curve in UTC)."""
@@ -144,7 +146,9 @@ def run_period(
         cost_model=cm,
         fx_for=lambda s: fx_applies(cfg, s),
     )
-    engine = Engine(cfg, strategy, params, broker, risk, journal or Journal(":memory:"))
+    engine = Engine(
+        cfg, strategy, params, broker, risk, journal or Journal(":memory:"), decider=decider
+    )
     active = set(days)
     events: list[tuple[pd.Timestamp, str, int]] = []
     for symbol, bars in bars_by_symbol.items():
@@ -315,6 +319,7 @@ def run_backtest(
     seed: int = 0,
     journal: Journal | None = None,
     notes: list[str] | None = None,
+    decider=None,
 ) -> BacktestResult:
     module = (
         strategy if isinstance(strategy, ModuleType) else load_strategy(strategy or cfg.strategy)
@@ -327,11 +332,20 @@ def run_backtest(
 
     _, is_trades, is_equity = run_period(cfg, module, base, bars_by_symbol, train_days)
     oos_engine, oos_trades, oos_equity = run_period(
-        cfg, module, base, bars_by_symbol, test_days, journal
+        cfg, module, base, bars_by_symbol, test_days, journal, decider=decider
     )
     metrics = compute_metrics(oos_trades, oos_equity, cfg.starting_cash)
     metrics["cash_capped_entries"] = oos_engine.capped_entries
     metrics["skipped_signals"] = oos_engine.skipped
+    notes = list(notes or [])
+    if decider is not None:
+        metrics["llm_calls"] = decider.calls
+        metrics["llm_cost_usd"] = round(decider.spend, 4)
+        notes.append(
+            f"out-of-sample period run with the LLM decider {decider.describe()}:"
+            f" {decider.calls} calls, {decider.spend:.2f} USD; the in-sample column is rules"
+            " only. LLM answers are not deterministic: re-runs will differ."
+        )
     train_metrics = compute_metrics(is_trades, is_equity, cfg.starting_cash)
 
     bh_metrics, bh_equity = buy_and_hold(cfg, bars_by_symbol, test_days)
@@ -358,5 +372,6 @@ def run_backtest(
         trades=oos_trades,
         equity=oos_equity,
         bench_equity={"buy_and_hold": bh_equity, "random_entry": rnd_equity},
-        notes=list(notes or []),
+        notes=notes,
+        decider=decider.describe() if decider is not None else "none",
     )

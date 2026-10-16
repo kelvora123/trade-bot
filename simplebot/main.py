@@ -26,8 +26,39 @@ LIVE_BANNER = """
 #  LIVE MODE: REAL MONEY. Orders go to {broker}.
 #  Stops are SOFTWARE stops polled every {poll}s: a gap can
 #  exceed your planned loss. Ctrl-C flattens everything.
+#  LLM decider: {decider}
 ############################################################
 """
+
+
+def make_decider(cfg: Config, journal: Journal, max_cost: float | None = None):
+    """The in-loop LLM decider, or None when decider.provider is none."""
+    if cfg.decider.provider == "none":
+        return None
+    from simplebot.decider import Decider
+    from simplebot.llm import make_llm
+
+    llm = make_llm(cfg, component="decider")
+    section = cfg.decider
+    if max_cost is not None:
+        from dataclasses import replace
+
+        section = replace(section, max_daily_cost_usd=max_cost)
+    return Decider(section, llm, journal, name=cfg.decider.provider)
+
+
+def estimate_decider_cost(cfg: Config, n_days: int) -> tuple[int, float]:
+    from simplebot import sessions
+    from simplebot.llm import estimate_cost
+
+    calls = 0
+    for symbol in cfg.symbols:
+        per_day = max(1, sessions.market_for(symbol).session_minutes // cfg.decider.every_minutes)
+        calls += per_day * n_days
+    per_call = (
+        estimate_cost(cfg.decider.model, 3500, 150) if cfg.decider.provider == "claude" else 0
+    )
+    return calls, calls * per_call
 
 
 def setup_logging(verbose: bool, logfile: str | None = None) -> None:
@@ -75,6 +106,22 @@ def cmd_backtest(cfg: Config, args: argparse.Namespace) -> int:
     else:
         strategies = [args.strategy or cfg.strategy]
     journal = Journal(cfg.journal_path) if Path(cfg.journal_path).exists() else None
+    decider = None
+    if args.llm:
+        if cfg.decider.provider == "none":
+            print("--llm needs decider.provider: claude or ollama in config.yaml")
+            return 2
+        days = sorted({d for b in bars.values() for d in b.index.date})
+        _, test_days = __import__("simplebot.backtest", fromlist=["split_days"]).split_days(
+            days, cfg.learning.train_fraction
+        )
+        calls, usd = estimate_decider_cost(cfg, len(test_days))
+        print(
+            f"LLM decider {learn.decider_description(cfg)} over {len(test_days)} out-of-sample"
+            f" days: up to ~{calls} calls, roughly {usd:.2f} USD; hard cap {args.max_llm_cost:.2f}"
+            " USD for this run. Answers are not deterministic."
+        )
+        decider = make_decider(cfg, Journal(":memory:"), max_cost=args.max_llm_cost)
     results = []
     for name in strategies:
         module = load_strategy(name)
@@ -91,7 +138,9 @@ def cmd_backtest(cfg: Config, args: argparse.Namespace) -> int:
                 f"grid search over {len(table)} parameter sets on the training window"
                 f" picked {params}"
             )
-        r = run_backtest(cfg, bars, strategy=module, params=params, seed=args.seed, notes=notes)
+        r = run_backtest(
+            cfg, bars, strategy=module, params=params, seed=args.seed, notes=notes, decider=decider
+        )
         if journal is not None:
             r.params_history = [h for h in journal.params_history() if h["applied"]]
         results.append(r)
@@ -177,7 +226,10 @@ def run_loop(cfg: Config, mode: str, args: argparse.Namespace) -> int:
         cost_model=cm,
         fx_for=lambda s: fx_applies(cfg, s),
     )
-    engine = Engine(cfg, module, params, broker, risk, journal, mode=mode, notifier=notifier)
+    decider = make_decider(cfg, journal)
+    engine = Engine(
+        cfg, module, params, broker, risk, journal, mode=mode, notifier=notifier, decider=decider
+    )
     provider = args.data or cfg.data.provider
 
     def fetch(symbol: str):
@@ -214,7 +266,11 @@ def cmd_live(cfg: Config, args: argparse.Namespace) -> int:
         for p in problems:
             print(f"  - {p}")
         return 3
-    print(LIVE_BANNER.format(broker=cfg.broker, poll=cfg.poll_seconds))
+    print(
+        LIVE_BANNER.format(
+            broker=cfg.broker, poll=cfg.poll_seconds, decider=learn.decider_description(cfg)
+        )
+    )
     return run_loop(cfg, "live", args)
 
 
@@ -324,6 +380,17 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--grid", action="store_true", help="grid-search params on the training window")
     bt.add_argument("--seed", type=int, default=0)
     bt.add_argument("--json", action="store_true", help="print the result as JSON only")
+    bt.add_argument(
+        "--llm",
+        action="store_true",
+        help="consult the configured LLM decider out of sample (costs money, slow)",
+    )
+    bt.add_argument(
+        "--max-llm-cost",
+        type=float,
+        default=5.0,
+        help="hard USD cap for --llm in this run (default 5)",
+    )
     add_data(bt)
     pp = sub.add_parser("paper", help="paper trade (simulator or broker demo account)")
     add_data(pp)

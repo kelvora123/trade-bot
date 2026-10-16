@@ -81,7 +81,14 @@ def header_lines(r: BacktestResult) -> list[str]:
         f"Costs: commission {r.costs['commission']}, FX fee {r.costs['fx_fee_pct']}%/side,"
         f" spread {r.costs['spread_bps']} bps, slippage {r.costs['slippage_bps']} bps/side",
         f"Generated: {r.created_at[:19].replace('T', ' ')} UTC",
-    ]
+    ] + (
+        [
+            f"LLM decider in the loop: {r.decider} (calls {r.metrics.get('llm_calls', 0)},"
+            f" cost {r.metrics.get('llm_cost_usd', 0)} USD)"
+        ]
+        if r.decider != "none"
+        else []
+    )
 
 
 def render_markdown(r: BacktestResult) -> str:

@@ -23,6 +23,7 @@ import pandas as pd
 from simplebot import sessions
 from simplebot.brokers.base import Broker, BrokerError
 from simplebot.config import Config
+from simplebot.decider import Decider, build_context
 from simplebot.journal import Journal
 from simplebot.risk import RiskManager
 from simplebot.strategies import Signal, strategy_name
@@ -81,8 +82,10 @@ class Engine:
         journal: Journal,
         mode: str = "backtest",
         notifier=None,
+        decider: Decider | None = None,
     ) -> None:
         self.cfg = cfg
+        self.decider = decider
         self.strategy = strategy
         self.strategy_name = strategy_name(strategy)
         self.params = dict(params)
@@ -158,6 +161,13 @@ class Engine:
             )
             if decision is not None:
                 self._exit(symbol, decision.reason, decision.price, ts)
+            elif (
+                self.decider is not None
+                and self.decider.role == "primary"
+                and not self.risk.state.halted
+                and self.decider.due(symbol, ts)
+            ):
+                self._llm_manage_open(symbol, bars, ts, mtc=None)
 
         if not self.risk.state.halted and self.risk.daily_loss_breached(self.equity()):
             self.journal.log("halt", self.risk.state.halt_reason, ts=ts)
@@ -205,24 +215,27 @@ class Engine:
             )
 
     # ----------------------------------------------------------------------- entries
-    def _maybe_enter(self, symbol: str, bars: pd.DataFrame, ts: datetime, mtc: float) -> None:
+    def _strategy_signal(self, symbol: str, bars: pd.DataFrame, ts: datetime) -> Signal | None:
         try:
             sig = self.strategy.signal(bars, self.params)
         except Exception as e:
             self.errors += 1
             self.journal.log("error", f"strategy raised: {e!r}", symbol=symbol, ts=ts)
             log.exception("strategy %s raised", self.strategy_name)
-            return
+            return None
         if sig is None:
-            return
+            return None
         if not isinstance(sig, Signal):
             self.journal.log("error", "strategy returned a non-Signal", symbol=symbol, ts=ts)
-            return
+            return None
+        return sig
+
+    def _try_enter(self, symbol: str, sig: Signal, ts: datetime, mtc: float) -> bool:
         ok, why = self.risk.can_enter(symbol, sig.side, len(self.open), mtc)
         if not ok:
             self.skipped += 1
             self.journal.log("skip", why, symbol=symbol, data={"signal": asdict(sig)}, ts=ts)
-            return
+            return False
         qty, why = self.risk.position_size(
             self.equity(),
             self.broker.get_cash(),
@@ -234,10 +247,108 @@ class Engine:
         if qty <= 0:
             self.skipped += 1
             self.journal.log("skip", why, symbol=symbol, data={"signal": asdict(sig)}, ts=ts)
-            return
+            return False
         if "capped" in why:
             self.capped_entries += 1
         self._enter(symbol, sig, qty, ts)
+        return symbol in self.open
+
+    def _maybe_enter(self, symbol: str, bars: pd.DataFrame, ts: datetime, mtc: float) -> None:
+        sig = self._strategy_signal(symbol, bars, ts)
+        if self.decider is None:
+            if sig is not None:
+                self._try_enter(symbol, sig, ts, mtc)
+            return
+        self._llm_entry(symbol, bars, ts, mtc, sig)
+
+    # ----------------------------------------------------------------------- LLM decider
+    def _decision_context(self, symbol: str, bars: pd.DataFrame, sig: Signal | None, mtc: float):
+        cm = getattr(self.risk, "cost_model", None)
+        rt = cm.round_trip_cost_pct(fx=self.risk._fx_for(symbol)) if cm is not None else 0.0
+        return build_context(
+            symbol,
+            bars,
+            self.equity(),
+            self.broker.get_cash(),
+            self.open.get(symbol),
+            sig,
+            self.cfg.risk,
+            self.cfg.allow_short,
+            rt,
+            self.decider.cfg,
+            mtc,
+            self.day_pnl,
+            self.day_trades,
+            self.strategy_name,
+        )
+
+    def _llm_entry(
+        self, symbol: str, bars: pd.DataFrame, ts: datetime, mtc: float, sig: Signal | None
+    ) -> None:
+        role = self.decider.role
+        if role == "last_resort" and sig is not None:
+            self._try_enter(symbol, sig, ts, mtc)  # the rules had an opinion: no model call
+            return
+        if role == "final_say" and sig is None:
+            return
+        if role != "final_say" and not self.decider.due(symbol, ts):
+            return
+        ok, _why = self.risk.can_enter(symbol, "long", len(self.open), mtc)
+        if not ok:
+            return  # do not pay for a decision we could not act on
+        decision = self.decider.decide(self._decision_context(symbol, bars, sig, mtc), ts)
+        if decision is None or decision.action in ("hold", "close"):
+            if sig is not None and role == "final_say":
+                self.skipped += 1
+                self.journal.log(
+                    "skip",
+                    f"{self.decider.name} rejected the signal:"
+                    f" {decision.reason if decision else 'no answer'}",
+                    symbol=symbol,
+                    data={"signal": asdict(sig)},
+                    ts=ts,
+                )
+            return
+        side = "long" if decision.action == "buy" else "short"
+        if role == "final_say" and sig is not None and side != sig.side:
+            self.skipped += 1
+            self.journal.log(
+                "skip",
+                f"{self.decider.name} answered {decision.action} to a"
+                f" {sig.side} signal: treated as rejection",
+                symbol=symbol,
+                ts=ts,
+            )
+            return
+        entry = float(bars["close"].iloc[-1])
+        reason = f"{self.decider.name}: {decision.reason}"
+        try:
+            llm_sig = Signal(side, entry, decision.stop_price, decision.target, reason=reason)
+        except ValueError as e:
+            if sig is not None and role == "final_say":
+                llm_sig = Signal(sig.side, sig.entry, sig.stop, sig.target, reason=reason)
+            else:
+                self.journal.log("decider_invalid", str(e), symbol=symbol, ts=ts)
+                return
+        self._try_enter(symbol, llm_sig, ts, mtc)
+
+    def _llm_manage_open(self, symbol: str, bars: pd.DataFrame, ts: datetime, mtc) -> None:
+        trade = self.open.get(symbol)
+        if trade is None:
+            return
+        market = sessions.market_for(symbol)
+        tf = int(bars.attrs.get("timeframe") or self.cfg.timeframe_minutes)
+        mtc = sessions.minutes_to_close(market, ts + timedelta(minutes=tf)) if mtc is None else mtc
+        decision = self.decider.decide(self._decision_context(symbol, bars, None, mtc), ts)
+        if decision is None:
+            return
+        closing = (
+            decision.action == "close"
+            or (decision.action == "sell" and trade.side == "long")
+            or (decision.action == "buy" and trade.side == "short")
+        )
+        if closing:
+            self._exit(symbol, "llm_close", self.last_prices.get(symbol, trade.entry_price), ts)
 
     def _enter(self, symbol: str, sig: Signal, qty: float, ts: datetime) -> None:
         side = "buy" if sig.side == "long" else "sell"
@@ -388,6 +499,11 @@ class Engine:
             f"trades today: {self.day_trades}; open: {len(self.open)}",
             f"strategy {self.strategy_name} params {self.params}",
         ]
+        if self.decider is not None:
+            lines.append(
+                f"decider {self.decider.describe()}: {self.decider.calls} calls,"
+                f" {self.decider.spend:.2f} USD"
+            )
         if s.halted:
             lines.append(f"HALTED: {s.halt_reason}")
         return "\n".join(lines)
