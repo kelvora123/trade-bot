@@ -1,0 +1,53 @@
+# Simplebot configuration. This is the ONLY file you need to edit.
+
+mode: paper              # paper | live   (live also needs SIMPLEBOT_LIVE_CONFIRM=yes in .env)
+broker: paper            # paper | trading212 | ibkr   (paper = built-in simulator; trading212 in paper mode uses the T212 demo account)
+account: invest          # invest | isa   (Trading 212 account type)
+account_currency: GBP    # the FX fee applies to instruments quoted in another currency
+symbols: [QQQ, SPY]      # Yahoo-style symbols. LSE symbols end in .L, e.g. EQQQ.L
+timeframe: 5m            # 1m | 5m | 15m
+strategy: orb            # orb | intraday_momentum | vwap_revert
+params: {range_minutes: 5, target_r: 10}
+starting_cash: 1000      # backtest and built-in paper simulator starting cash (in the instrument's currency)
+allow_short: false       # Trading 212 Invest/ISA accounts cannot short; leave false
+max_entries_per_day: 1   # per symbol
+
+risk:
+  risk_per_trade_pct: 0.5          # max loss per trade as % of equity (entry to stop)
+  max_daily_loss_pct: 2            # hit this and the bot flattens everything and stops for the day
+  max_positions: 3
+  flatten_minutes_before_close: 10
+
+costs:
+  commission: 0                    # per order, in instrument currency (T212: 0; IBKR: ~1)
+  fx_fee_pct: 0.15                 # T212 currency conversion fee, charged on each side (0 if you hold USD cash)
+  spread_bps: 2                    # full bid-ask spread; half is paid on each side
+  slippage_bps: 3                  # per side
+
+data:
+  provider: yahoo                  # yahoo (keyless, last 60 days of 5m bars) | alpaca (free account, years of 1m bars) | csv | synthetic
+  lookback_days: 60
+  cache_dir: cache
+  csv_dir: data
+
+learning:
+  refit_every_days: 5              # walk-forward re-fit of params on the training window
+  min_oos_trades: 30               # a challenger needs this many out-of-sample trades
+  min_sharpe_gain: 0.1             # ...and must beat the champion's Sharpe by this much, after costs
+  train_fraction: 0.7              # first 70% of days = train, last 30% = out-of-sample
+
+coach:
+  provider: none                   # claude | ollama | none
+  model: claude-opus-5-5           # Claude model id (used when provider: claude)
+  ollama_model: llama3.1:8b        # local model name (used when provider: ollama)
+  lookback_days: 20
+  auto_apply_params: false         # true = param proposals that pass the gate are applied without a human
+  max_daily_cost_usd: 0.50
+
+# Map your symbols to broker tickers when the broker uses different names (Trading 212 uses e.g. AAPL_US_EQ).
+symbol_map: {}
+
+poll_seconds: 30                   # how often the live loop checks prices for software stops
+journal_path: simplebot.sqlite
+reports_dir: reports
+telegram: true                     # send daily summaries if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID are set
