@@ -115,13 +115,13 @@ from simplebot.strategies import Signal
 from simplebot.strategies.common import daily_atr, today_bars
 
 DEFAULT_PARAMS = {"lookback": 6, "target_r": 3}
-PARAM_GRID = {"lookback": [3, 6, 12], "target_r": [2, 3, 5]}   # optional, for the learning loop
+PARAM_GRID = {"lookback": [3, 6, 12], "target_r": [2, 3, 5]}  # optional, for the learning loop
 
 
 def signal(bars, params):
     p = {**DEFAULT_PARAMS, **params}
     today = today_bars(bars)
-    if len(today) != p["lookback"] + 1:          # fire once, right after the lookback window
+    if len(today) != p["lookback"] + 1:  # fire once, right after the lookback window
         return None
     high = float(today["high"].iloc[:-1].max())
     close = float(today["close"].iloc[-1])
