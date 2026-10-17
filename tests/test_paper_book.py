@@ -235,3 +235,30 @@ def test_history_progress_tracks_the_iv_rank_threshold():
     assert by_ticker["NVDA"]["iv_rank_available"] is False
     assert by_ticker["NVDA"]["pct_to_minimum"] == pytest.approx(25.0)
     assert by_ticker["AAPL"]["iv_rank_available"] is True
+
+
+# ------------------------------------------------- OCC symbol round trip
+
+
+def test_occ_symbol_round_trips_through_from_occ_symbol():
+    h = opt(qty=2, basis=0.30, strike=12.5)
+    back = Holding.from_occ_symbol(h.occ_symbol(), qty=2, cost_basis=0.30)
+    assert back.ticker == h.ticker
+    assert back.option_kind is h.option_kind
+    assert back.strike == pytest.approx(h.strike)
+    assert back.expiry == h.expiry
+    assert back.occ_symbol() == h.occ_symbol()
+
+
+def test_from_occ_symbol_reads_puts_and_fractional_strikes():
+    h = Holding.from_occ_symbol("NVDA261218P00167500")
+    assert h.ticker == "NVDA"
+    assert h.option_kind is OptionKind.PUT
+    assert h.strike == pytest.approx(167.5)
+    assert h.contract_multiplier == 100
+
+
+def test_from_occ_symbol_treats_a_plain_ticker_as_shares():
+    h = Holding.from_occ_symbol("AAPL", qty=10, cost_basis=225.40)
+    assert h.kind is AssetKind.SHARES
+    assert h.contract_multiplier == 1

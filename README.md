@@ -56,6 +56,10 @@ $ tradebot paper --check-affordable NVDA260320C00180000 --qty 1 --mark 13.0
 Not affordable: needs 1300.65 GBP, have 100.00, short 1200.65.
 ```
 
+That works for any OCC symbol, held or not: the contract's terms are read off
+the symbol itself, so pricing one up needs no `portfolio.yaml` and no open
+position.
+
 The realistic path is to run this in paper mode against a realistic simulated
 balance, accumulate the snapshot history the IV-rank layer needs (20 days
 minimum, 252 for a full ranking), and fund a real account only once the

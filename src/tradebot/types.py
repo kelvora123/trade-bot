@@ -7,6 +7,7 @@ straight into the n8n workflows without a serialisation shim.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum
@@ -101,6 +102,42 @@ class Holding:
         cp = "C" if self.option_kind is OptionKind.CALL else "P"
         strike_int = int(round(self.strike * 1000))
         return f"{self.ticker}{self.expiry:%y%m%d}{cp}{strike_int:08d}"
+
+    @classmethod
+    def from_occ_symbol(
+        cls,
+        symbol: str,
+        qty: float = 1.0,
+        cost_basis: float = 0.0,
+        multiplier: int = 100,
+    ) -> Holding:
+        """Rebuild a Holding from an OCC-style symbol alone.
+
+        The inverse of :meth:`occ_symbol`, for the cases where a symbol is all
+        the caller has -- pricing up a contract that is in neither the paper
+        book nor ``portfolio.yaml``. A symbol with no option suffix is read as
+        an equity line.
+        """
+        sym = symbol.strip().upper()
+        if not sym:
+            raise ValueError("empty symbol")
+        m = re.fullmatch(r"(?P<root>.+)(?P<expiry>\d{6})(?P<cp>[CP])(?P<strike>\d{8})", sym)
+        if m is None:
+            return cls(sym, AssetKind.SHARES, qty, cost_basis, multiplier=1)
+        try:
+            expiry = datetime.strptime(m["expiry"], "%y%m%d").date()
+        except ValueError as exc:
+            raise ValueError(f"{sym}: unparseable expiry {m['expiry']!r}") from exc
+        return cls(
+            ticker=m["root"],
+            kind=AssetKind.OPTION,
+            qty=qty,
+            cost_basis=cost_basis,
+            option_kind=OptionKind.CALL if m["cp"] == "C" else OptionKind.PUT,
+            strike=int(m["strike"]) / 1000.0,
+            expiry=expiry,
+            multiplier=multiplier,
+        )
 
     def dte(self, asof: date | None = None) -> int | None:
         """Actual calendar days to expiry. ``None`` for shares."""

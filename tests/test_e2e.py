@@ -187,6 +187,43 @@ def test_paper_affordability_check_rejects_on_small_account(project, capsys):
     assert "Not affordable" in capsys.readouterr().err
 
 
+def test_affordability_check_needs_no_portfolio_file(tmp_path, capsys):
+    """Pricing a contract you do not hold must not require portfolio.yaml.
+
+    The README quotes this command for a fresh clone, where portfolio.yaml has
+    not been created yet and the contract is in neither the book nor the file.
+    """
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text(
+        yaml.safe_dump({"paper": {"starting_cash": 100.0, "currency": "GBP"}})
+    )
+    code = main(
+        [
+            "--root", str(tmp_path), "paper",
+            "--check-affordable", "NVDA260320C00180000",
+            "--qty", "1", "--mark", "13.0",
+        ]
+    )
+    out = capsys.readouterr()
+    assert code == 1
+    assert "short 1200.65" in out.err
+    payload = json.loads(out.out)
+    assert payload["contract_multiplier"] == 100  # terms read off the symbol
+    assert payload["total_cost"] == pytest.approx(1300.65)
+
+
+def test_affordability_check_prices_a_bare_equity_symbol(tmp_path, capsys):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text(
+        yaml.safe_dump({"paper": {"starting_cash": 100.0, "currency": "GBP"}})
+    )
+    assert main(["--root", str(tmp_path), "paper", "--check-affordable", "AAPL",
+                 "--qty", "1", "--mark", "40.0"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["contract_multiplier"] == 1  # shares, not a 100x contract
+    assert payload["affordable"] is True
+
+
 def test_usage_subcommand_reports_zero_spend(project, capsys):
     assert main(["--root", str(project), "usage"]) == 0
     payload = json.loads(capsys.readouterr().out)

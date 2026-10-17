@@ -247,6 +247,45 @@ def _holding_from_args(args: argparse.Namespace, store: Store) -> Holding:
     )
 
 
+def _holding_for_pricing(
+    symbol: str, qty: float, mark: float, store: Store, portfolio_path: Path
+) -> Holding:
+    """Resolve the terms of a contract being priced up, from whatever knows them.
+
+    An open paper position first, then ``portfolio.yaml`` if it exists, and
+    failing both the OCC symbol itself -- the point of ``--check-affordable``
+    is to price a contract you do *not* hold yet, so neither file is required.
+    """
+    existing = store.get_position(symbol)
+    if existing is not None:
+        return Holding(
+            ticker=existing["ticker"],
+            kind=AssetKind(existing["kind"]),
+            qty=qty,
+            cost_basis=mark,
+            option_kind=OptionKind(existing["option_kind"]) if existing["option_kind"] else None,
+            strike=existing["strike"],
+            expiry=date.fromisoformat(existing["expiry"]) if existing["expiry"] else None,
+            multiplier=int(existing["multiplier"]),
+        )
+
+    if Path(portfolio_path).exists():
+        for h in load_portfolio(portfolio_path):
+            if h.occ_symbol() == symbol:
+                return Holding(
+                    ticker=h.ticker,
+                    kind=h.kind,
+                    qty=qty,
+                    cost_basis=mark,
+                    option_kind=h.option_kind,
+                    strike=h.strike,
+                    expiry=h.expiry,
+                    multiplier=h.multiplier,
+                )
+
+    return Holding.from_occ_symbol(symbol, qty=qty, cost_basis=mark)
+
+
 def cmd_trade(args: argparse.Namespace) -> int:
     """Record a simulated buy or sell against the paper book."""
     cfg = load_config(args.config, root=args.root)
@@ -448,11 +487,8 @@ def cmd_paper(args: argparse.Namespace) -> int:
     with Store(cfg.path("database")) as store:
         broker = PaperBroker(cfg, store)
         if args.check_affordable:
-            holdings = {h.occ_symbol(): h for h in load_portfolio(cfg.path("portfolio"))}
-            holding = holdings.get(args.check_affordable)
-            if holding is None:
-                log.error("symbol %r not in portfolio. Known: %s", args.check_affordable, ", ".join(holdings))
-                return 1
+            holding = _holding_for_pricing(args.check_affordable, args.qty, args.mark, store,
+                                           cfg.path("portfolio"))
             report = broker.affordability(holding, args.qty, args.mark)
             print(json.dumps(report, indent=2))
             if not report["affordable"]:
