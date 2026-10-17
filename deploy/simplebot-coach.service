@@ -1,0 +1,10 @@
+# One-shot: the offline AI coach. Started by simplebot-coach.timer after the US close.
+[Unit]
+Description=Simplebot coach (offline review, never trades)
+
+[Service]
+Type=oneshot
+User=simplebot
+WorkingDirectory=/opt/simplebot
+EnvironmentFile=/opt/simplebot/.env
+ExecStart=/opt/simplebot/.venv/bin/python -m simplebot coach

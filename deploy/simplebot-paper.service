@@ -1,0 +1,22 @@
+# systemd unit for the paper-trading loop. Adjust paths and the user.
+#   sudo cp deploy/simplebot-paper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now simplebot-paper
+#   journalctl -u simplebot-paper -f
+[Unit]
+Description=Simplebot paper trading loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=simplebot
+WorkingDirectory=/opt/simplebot
+EnvironmentFile=/opt/simplebot/.env
+ExecStart=/opt/simplebot/.venv/bin/python -m simplebot paper
+Restart=on-failure
+RestartSec=30
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target
