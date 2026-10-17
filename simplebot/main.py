@@ -237,7 +237,18 @@ def run_loop(cfg: Config, mode: str, args: argparse.Namespace) -> int:
             cfg, symbol, provider=provider, lookback_days=min(cfg.data.lookback_days, 10)
         )
 
-    runner = Runner(cfg, mode, engine, fetch, journal, notifier)
+    from simplebot.guardian import make_guardian
+
+    guardian = make_guardian(cfg, journal, notifier=notifier)
+    if guardian.stopped:
+        info = guardian.stop_info() or {}
+        print(
+            f"refusing to trade: the guardian stopped the bot ({info.get('source')}) on"
+            f" {str(info.get('ts', ''))[:16]}: {info.get('reason')}\n"
+            "Review the dashboard and journal, then run `python -m simplebot resume`."
+        )
+        return 4
+    runner = Runner(cfg, mode, engine, fetch, journal, notifier, guardian=guardian)
     runner.install_signal_handlers()
     print(
         f"{mode} mode: broker={broker.name} strategy={cfg.strategy} params={params}"
@@ -279,6 +290,15 @@ def cmd_check(cfg: Config, args: argparse.Namespace) -> int:
     print("Rule 6 live gate: " + ("PASSED" if ok else "NOT MET"))
     for p in problems:
         print(f"  - {p}")
+    from simplebot.guardian import stopped_info
+
+    info = stopped_info(cfg)
+    if info:
+        print(
+            f"GUARDIAN STOP in force ({info.get('source')}): {info.get('reason')}"
+            " -> `python -m simplebot resume` after reviewing"
+        )
+        return 1
     return 0 if ok else 1
 
 
@@ -359,6 +379,55 @@ def cmd_dashboard(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_guardian(cfg: Config, args: argparse.Namespace) -> int:
+    """Run the guardian's review now (rules + AI reviewer) against the paper or live journal."""
+    from simplebot.guardian import make_guardian
+    from simplebot.notify import make_notifier
+
+    mode = args.mode or cfg.mode
+    journal = Journal(cfg.journal_path, mode=mode)
+    guardian = make_guardian(cfg, journal, notifier=make_notifier(cfg))
+    if guardian.stopped and not args.dry_run:
+        info = guardian.stop_info() or {}
+        print(f"already stopped ({info.get('source')}): {info.get('reason')}")
+        return 1
+    if args.dry_run:
+        reasons = guardian.rule_reasons()
+        print("rules: " + ("; ".join(reasons) if reasons else "nothing fired"))
+        v = guardian.ai_review()
+        if v is not None:
+            print(
+                f"AI reviewer ({v.model}): {v.verdict} (confidence {v.confidence:.2f}) {v.reason}"
+            )
+        else:
+            print("AI reviewer: no opinion (not configured, no key, or an error)")
+        return 0
+    out = guardian.daily_review()
+    if out.get("stopped"):
+        print(
+            "STOPPED: "
+            + "; ".join(out.get("reasons") or [])
+            + (f" AI: {out['verdict'].reason}" if out.get("verdict") else "")
+        )
+        return 1
+    v = out.get("verdict")
+    print("review passed: nothing fired" + (f"; AI said continue: {v.reason}" if v else ""))
+    return 0
+
+
+def cmd_resume(cfg: Config, args: argparse.Namespace) -> int:
+    from simplebot.guardian import Guardian
+
+    journal = Journal(cfg.journal_path, mode=args.mode or cfg.mode)
+    g = Guardian(cfg, journal)
+    info = g.stop_info()
+    if g.resume("human"):
+        print(f"resumed. The guardian had stopped the bot for: {(info or {}).get('reason')}")
+        return 0
+    print("nothing to resume: the bot is not stopped")
+    return 0
+
+
 def cmd_instruments(cfg: Config, args: argparse.Namespace) -> int:
     from simplebot.brokers.trading212 import Trading212Broker
 
@@ -431,6 +500,11 @@ def build_parser() -> argparse.ArgumentParser:
     rf.add_argument("--no-apply", action="store_true")
     add_data(rf)
     sub.add_parser("check", help="show whether Rule 6 would allow going live")
+    gd = sub.add_parser("guardian", help="run the watchdog review now; it may stop the bot")
+    gd.add_argument("--mode", choices=["paper", "live"], default=None)
+    gd.add_argument("--dry-run", action="store_true", help="report without stopping anything")
+    rs = sub.add_parser("resume", help="clear a guardian stop (humans only)")
+    rs.add_argument("--mode", choices=["paper", "live"], default=None)
     db = sub.add_parser(
         "dashboard", help="serve the local dashboard (reads the journal; never trades)"
     )
@@ -457,6 +531,8 @@ COMMANDS = {
     "check": cmd_check,
     "instruments": cmd_instruments,
     "dashboard": cmd_dashboard,
+    "guardian": cmd_guardian,
+    "resume": cmd_resume,
 }
 
 
