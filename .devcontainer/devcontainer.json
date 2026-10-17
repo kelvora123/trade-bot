@@ -1,0 +1,13 @@
+{
+  "name": "Simplebot",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "postCreateCommand": "pip install -e \".[dev,claude]\" && (cp -n .env.example .env || true)",
+  "postStartCommand": "nohup python -m simplebot dashboard --demo --port 8787 > /tmp/dashboard.log 2>&1 &",
+  "forwardPorts": [8787],
+  "portsAttributes": {
+    "8787": { "label": "Simplebot dashboard", "onAutoForward": "openBrowser" }
+  },
+  "customizations": {
+    "vscode": { "extensions": ["ms-python.python"] }
+  }
+}
