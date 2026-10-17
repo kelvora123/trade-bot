@@ -8,6 +8,7 @@ cache/
 reports/
 *.sqlite
 *.sqlite-journal
+*.STOPPED
 simplebot/strategies/proposed/
 
 # python

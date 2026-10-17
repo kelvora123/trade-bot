@@ -20,7 +20,13 @@ TIMEFRAME_RE = re.compile(r"^(\d+)m$")
 
 # Keys under `risk:` are owned by the human. Nothing automated may change them.
 RISK_KEYS = frozenset(
-    {"risk_per_trade_pct", "max_daily_loss_pct", "max_positions", "flatten_minutes_before_close"}
+    {
+        "risk_per_trade_pct",
+        "max_daily_loss_pct",
+        "max_positions",
+        "flatten_minutes_before_close",
+        "max_stop_pct",
+    }
 )
 
 
@@ -34,6 +40,7 @@ class RiskConfig:
     max_daily_loss_pct: float = 2.0
     max_positions: int = 3
     flatten_minutes_before_close: int = 10
+    max_stop_pct: float = 3.0  # no stop may sit further than this from the entry
 
 
 @dataclass
@@ -87,6 +94,26 @@ class DeciderConfig:
 
 
 @dataclass
+class GuardianConfig:
+    """The watchdog that can stop the bot completely. Rules always on; AI reviewer optional."""
+
+    max_drawdown_pct: float = 10.0
+    max_loss_30d_pct: float = 6.0
+    max_consecutive_losing_days: int = 5
+    max_halts_30d: int = 3
+    max_errors_per_day: int = 10
+    min_trades_for_judgement: int = 10
+    expected_range_r: float = 1.0
+    provider: str = "claude"  # none | claude | ollama; it can only stop, never resume
+    model: str = "claude-opus-5-5"
+    ollama_model: str = "llama3.1:8b"
+    min_confidence: float = 0.7
+    max_daily_cost_usd: float = 0.5
+    timeout_seconds: float = 120.0
+    stop_file: str = "simplebot.STOPPED"
+
+
+@dataclass
 class Config:
     mode: str = "paper"
     broker: str = "paper"
@@ -104,6 +131,7 @@ class Config:
     learning: LearningConfig = field(default_factory=LearningConfig)
     coach: CoachConfig = field(default_factory=CoachConfig)
     decider: DeciderConfig = field(default_factory=DeciderConfig)
+    guardian: GuardianConfig = field(default_factory=GuardianConfig)
     symbol_map: dict[str, str] = field(default_factory=dict)
     poll_seconds: int = 30
     journal_path: str = "simplebot.sqlite"
@@ -159,6 +187,7 @@ def from_dict(raw: dict[str, Any], path: str = "config.yaml") -> Config:
         learning=_build(LearningConfig, raw.get("learning"), "learning"),
         coach=_build(CoachConfig, raw.get("coach"), "coach"),
         decider=_build(DeciderConfig, raw.get("decider"), "decider"),
+        guardian=_build(GuardianConfig, raw.get("guardian"), "guardian"),
         symbol_map={str(k).upper(): str(v) for k, v in (raw.get("symbol_map") or {}).items()},
         poll_seconds=int(raw.get("poll_seconds", 30)),
         journal_path=str(raw.get("journal_path", "simplebot.sqlite")),
@@ -205,6 +234,17 @@ def validate(cfg: Config) -> None:
         raise ConfigError("risk.max_positions must be >= 1")
     if r.flatten_minutes_before_close < 1:
         raise ConfigError("risk.flatten_minutes_before_close must be >= 1")
+    if not (0 < r.max_stop_pct <= 20):
+        raise ConfigError("risk.max_stop_pct must be between 0 and 20 (percent)")
+    g = cfg.guardian
+    if g.provider not in VALID_COACH_PROVIDERS:
+        raise ConfigError(f"guardian.provider must be one of {VALID_COACH_PROVIDERS}")
+    if not (0 < g.max_drawdown_pct <= 100) or not (0 < g.max_loss_30d_pct <= 100):
+        raise ConfigError("guardian drawdown/loss limits must be percentages between 0 and 100")
+    if g.max_consecutive_losing_days < 1 or g.max_halts_30d < 1 or g.max_errors_per_day < 1:
+        raise ConfigError("guardian day/halt/error limits must be >= 1")
+    if not (0 <= g.min_confidence <= 1):
+        raise ConfigError("guardian.min_confidence must be between 0 and 1")
     c = cfg.costs
     if min(c.commission, c.fx_fee_pct, c.spread_bps, c.slippage_bps) < 0:
         raise ConfigError("costs must not be negative")

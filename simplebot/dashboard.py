@@ -27,6 +27,7 @@ import pandas as pd
 from simplebot import learn, sessions
 from simplebot.backtest import BacktestResult, result_currency
 from simplebot.config import Config
+from simplebot.guardian import stopped_info
 from simplebot.journal import Journal
 
 log = logging.getLogger(__name__)
@@ -203,6 +204,7 @@ def collect(
             "alive": age is not None and age <= STALE_AFTER,
             "loop_active": bool(hb.get("active")),
             "markets": market_status(cfg, now),
+            "stopped": stopped_info(cfg),
             "halted": bool(engine.get("halted")),
             "halt_reason": engine.get("halt_reason", ""),
         },

@@ -187,6 +187,36 @@ Stops and targets are enforced by `risk.py`, exits at end of day too; the strate
   If both are touched in one bar the stop is assumed to have hit first; gaps fill at the open,
   never at the level.
 
+## Stop losses and the guardian
+
+Every trade has a stop loss, in code, whoever proposed the trade:
+
+- a signal without a stop is rejected before it reaches the engine;
+- `risk.max_stop_pct` caps how far any stop may sit from the entry (default 3%), so a wide
+  strategy stop or a model's stop is tightened and logged;
+- the stop is checked on every completed bar and on every price poll in between, and a gap
+  fills at the open rather than at the level;
+- the 2% daily loss stop flattens everything and halts for the rest of the day.
+
+Above that sits the **guardian**, a watchdog that can stop the bot **completely**: flatten every
+position, write a `simplebot.STOPPED` file, alert you, and exit. While that file exists `paper`
+and `live` refuse to run; only `python -m simplebot resume` (you) removes it.
+
+- **Rules, always on** (`guardian:` in `config.yaml`): equity 10% below its peak, a 6% net loss
+  over 30 days, five consecutive losing days, three daily-loss halts in 30 days, ten errors or
+  rejected orders in a day, or an average R more than 1R below the backtest it was approved on
+  once there are enough trades to judge. The drawdown rule runs on every bar; the rest after
+  each close.
+- **AI reviewer, optional** (`guardian.provider: claude` or `ollama`): after each close it reads
+  the last 30 days of results, the trades, the recent errors and the backtest's expectations, and
+  returns a structured verdict. A `stop` with confidence above `guardian.min_confidence` stops
+  the bot. It can only ever stop: it cannot loosen a limit, change a setting or resume. Without
+  an API key it is skipped with a warning and the rules still apply. A review costs a few cents
+  and is capped per day.
+- `python -m simplebot guardian --dry-run` shows what the rules and the reviewer would say right
+  now; `python -m simplebot guardian` runs the real review; `python -m simplebot check` reports a
+  stop in force; the dashboard shows a red banner with the reason.
+
 ## Costs (always on)
 
 `costs.spread_bps` (half paid on each side), `costs.slippage_bps` (each side),
@@ -355,7 +385,8 @@ adds a hook that blocks commits containing anything that looks like a key, plus 
 config.yaml                 the only file you edit
 .env.example                keys and tokens go in .env (git-ignored)
 simplebot/
-  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard
+  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard | guardian | resume
+  guardian.py               the watchdog: deterministic rules + optional AI reviewer that can stop the bot completely
   dashboard.py + .html      the local dashboard (reads the journal and reports; never trades)
   config.py sessions.py     config loading/validation, exchange hours
   data.py                   bar providers and the parquet cache
@@ -380,7 +411,8 @@ docs/RESEARCH.md            Step 0 research with sources
 2. No LLM calls in the trading loop unless you set `decider.provider`. Even then sizing, stops,
    the daily loss stop and the flatten stay in code, and the coach still only proposes.
 3. Costs are always on. There is no gross-only number anywhere.
-4. Risk limits are enforced in code, not in the strategy.
+4. Risk limits are enforced in code, not in the strategy, including a capped stop loss on
+   every trade and a guardian that can stop the bot completely.
 5. Secrets only from `.env`; a pre-commit scan blocks keys.
 6. A strategy may go live only after beating buy-and-hold out of sample after costs and
    20+ paper days within the expected range. `python -m simplebot check` is the judge.

@@ -171,7 +171,7 @@ class OllamaLLM:
 
 def make_llm(cfg: Config, provider: str | None = None, component: str = "coach"):
     """Build the client for the coach (default) or the in-loop decider."""
-    section = cfg.decider if component == "decider" else cfg.coach
+    section = {"decider": cfg.decider, "guardian": cfg.guardian}.get(component, cfg.coach)
     provider = provider or section.provider
     if provider == "claude":
         timeout = getattr(section, "timeout_seconds", 120.0)
