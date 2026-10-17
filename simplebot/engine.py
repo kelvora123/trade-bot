@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import ModuleType
 from typing import Any
 
@@ -187,6 +187,62 @@ class Engine:
             self._maybe_enter(symbol, bars, ts, mtc)
 
         self.equity_curve.append((ts, self.equity()))
+        if self.mode != "backtest":
+            self.snapshot(ts)
+
+    def snapshot(self, ts: datetime | None = None) -> dict[str, Any]:
+        """Write the engine's current state to the journal (the dashboard reads it)."""
+        s = self.risk.state
+        open_trades = []
+        for t in self.open.values():
+            last = self.last_prices.get(t.symbol, t.entry_price)
+            direction = 1.0 if t.side == "long" else -1.0
+            open_trades.append(
+                {
+                    "symbol": t.symbol,
+                    "side": t.side,
+                    "qty": t.qty,
+                    "entry_price": t.entry_price,
+                    "entry_ts": t.entry_ts.isoformat(),
+                    "stop": t.stop,
+                    "target": t.target,
+                    "reason": t.reason,
+                    "last_price": last,
+                    "unrealized": (last - t.entry_price) * t.qty * direction,
+                    "risk": t.risk_per_unit * t.qty,
+                }
+            )
+        state = {
+            "ts": (ts or datetime.now(UTC)).isoformat(),
+            "day": str(s.day),
+            "equity": self.equity(),
+            "cash": float(self.broker.get_cash()),
+            "day_pnl": self.day_pnl,
+            "day_costs": self.day_costs,
+            "day_trades": self.day_trades,
+            "halted": s.halted,
+            "halt_reason": s.halt_reason,
+            "open_trades": open_trades,
+            "last_prices": dict(self.last_prices),
+            "strategy": self.strategy_name,
+            "params": self.params,
+            "mode": self.mode,
+            "broker": self.broker.name,
+            "decider": (
+                {
+                    "calls": self.decider.calls,
+                    "spend": self.decider.spend,
+                    "describe": self.decider.describe(),
+                }
+                if self.decider
+                else None
+            ),
+        }
+        try:
+            self.journal.set_state("engine", state, ts=ts)
+        except Exception as e:  # a dashboard snapshot must never stop trading
+            log.warning("state snapshot failed: %s", e)
+        return state
 
     def on_tick(self, symbol: str, price: float, ts: datetime) -> None:
         """Between bars (live/paper): check software stops against the latest price."""

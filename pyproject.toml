@@ -28,6 +28,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["simplebot*"]
 
+[tool.setuptools.package-data]
+simplebot = ["*.html"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

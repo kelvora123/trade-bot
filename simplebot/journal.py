@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS params_history (
 CREATE TABLE IF NOT EXISTS coach_notes (id INTEGER PRIMARY KEY, ts TEXT, note TEXT);
 CREATE TABLE IF NOT EXISTS llm_spend (date TEXT, component TEXT, usd REAL,
   PRIMARY KEY (date, component));
+CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT, ts TEXT);
 """
 
 
@@ -39,7 +40,7 @@ class Journal:
     def __init__(self, path: str = ":memory:", mode: str = "backtest") -> None:
         self.path = path
         self.mode = mode
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path, timeout=10)
         self.conn.executescript(SCHEMA)
         self.conn.commit()
 
@@ -212,8 +213,33 @@ class Journal:
         )
         self.conn.commit()
 
+    def llm_spend_since(self, days: int, day: date | None = None) -> dict[str, float]:
+        day = day or datetime.now(UTC).date()
+        start = (day - timedelta(days=days)).isoformat()
+        rows = self.conn.execute(
+            "SELECT component, SUM(usd) FROM llm_spend WHERE date >= ? GROUP BY component", (start,)
+        ).fetchall()
+        return {str(r[0]): float(r[1] or 0.0) for r in rows}
+
     def coach_spend_today(self, day: date | None = None) -> float:
         return self.llm_spend_today("coach", day)
+
+    # state snapshots (for the dashboard) ---------------------------------------------
+    def set_state(self, key: str, value: Any, ts: datetime | None = None) -> None:
+        self.conn.execute(
+            "INSERT INTO state (key, value, ts) VALUES (?, ?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value, ts = excluded.ts",
+            (key, json.dumps(value, default=str), _iso(ts)),
+        )
+        self.conn.commit()
+
+    def get_state(self, key: str) -> Any:
+        row = self.conn.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def all_state(self) -> dict[str, Any]:
+        rows = self.conn.execute("SELECT key, value, ts FROM state").fetchall()
+        return {r[0]: {"value": json.loads(r[1]), "ts": r[2]} for r in rows}
 
     def add_coach_spend(self, usd: float, day: date | None = None) -> None:
         self.add_llm_spend("coach", usd, day)

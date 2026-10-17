@@ -134,6 +134,14 @@ class Runner:
                 self.engine.on_tick(symbol, float(bars["close"].iloc[-1]), now)
         if not active:
             self.maybe_daily_summary(now)
+        try:
+            self.journal.set_state(
+                "heartbeat",
+                {"ts": now.isoformat(), "active": active, "steps": self.steps, "mode": self.mode},
+                ts=now,
+            )
+        except Exception as e:  # never let bookkeeping stop the loop
+            log.warning("heartbeat write failed: %s", e)
         return active
 
     def maybe_daily_summary(self, now: datetime) -> None:

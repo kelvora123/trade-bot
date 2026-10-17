@@ -334,6 +334,31 @@ def cmd_coach(cfg: Config, args: argparse.Namespace) -> int:
     return 0 if out["status"] in ("ok", "skipped") else 1
 
 
+def cmd_dashboard(cfg: Config, args: argparse.Namespace) -> int:
+    from simplebot import dashboard
+
+    if args.demo:
+        workdir = Path(args.demo_dir or (Path(cfg.reports_dir) / "demo"))
+        print(f"seeding demo journal and backtest under {workdir} (synthetic data)")
+        cfg = dashboard.build_demo(cfg, workdir)
+    mode = args.mode or cfg.mode
+    if args.static:
+        out = Path(args.static)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(dashboard.render_html(dashboard.collect(cfg, mode=mode), static=True))
+        print(f"dashboard snapshot written to {out}")
+        return 0
+    dashboard.serve(
+        cfg,
+        host=args.host,
+        port=args.port,
+        mode=mode,
+        refresh_seconds=args.refresh,
+        open_browser=args.open,
+    )
+    return 0
+
+
 def cmd_instruments(cfg: Config, args: argparse.Namespace) -> int:
     from simplebot.brokers.trading212 import Trading212Broker
 
@@ -406,6 +431,17 @@ def build_parser() -> argparse.ArgumentParser:
     rf.add_argument("--no-apply", action="store_true")
     add_data(rf)
     sub.add_parser("check", help="show whether Rule 6 would allow going live")
+    db = sub.add_parser(
+        "dashboard", help="serve the local dashboard (reads the journal; never trades)"
+    )
+    db.add_argument("--host", default="127.0.0.1", help="bind address (keep localhost on a VPS)")
+    db.add_argument("--port", type=int, default=8787)
+    db.add_argument("--mode", choices=["paper", "live"], default=None, help="which journal to show")
+    db.add_argument("--refresh", type=int, default=30, help="auto-refresh seconds")
+    db.add_argument("--open", action="store_true", help="open a browser tab")
+    db.add_argument("--static", default=None, help="write a self-contained HTML snapshot and exit")
+    db.add_argument("--demo", action="store_true", help="seed synthetic paper trades first")
+    db.add_argument("--demo-dir", default=None)
     ins = sub.add_parser("instruments", help="search Trading 212 instrument tickers")
     ins.add_argument("--search", required=True)
     return p
@@ -420,6 +456,7 @@ COMMANDS = {
     "refit": cmd_refit,
     "check": cmd_check,
     "instruments": cmd_instruments,
+    "dashboard": cmd_dashboard,
 }
 
 

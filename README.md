@@ -86,6 +86,28 @@ your Trading 212 **demo** account instead. Either way the bot:
 Run it as a service: see [deploy/](deploy/) for a systemd unit (`simplebot-paper.service`), a
 timer for the coach, a Dockerfile and a compose file.
 
+## Dashboard
+
+```bash
+python -m simplebot dashboard            # http://127.0.0.1:8787, refreshes every 30 s
+python -m simplebot dashboard --demo     # seeded with synthetic paper trades, to see the layout
+python -m simplebot dashboard --static snapshot.html   # a self-contained page you can share
+```
+
+One page, read straight from the journal and the saved backtest, that answers "how is it
+doing?": a status strip (running or stale, market open or closed, halted, LLM decider and
+coach on or off), a range and symbol filter row, equity as the hero figure with P&L today and
+over the range, max drawdown, Sharpe, win rate and average R, costs paid and LLM spend; an
+equity curve with drawdown, daily P&L columns, open positions with unrealised P&L and the
+amount at risk, trade analytics by exit reason, symbol, entry hour and R-multiple, the latest
+backtest against buy-and-hold and random entry, the learning loop (Rule 6 gate, parameter
+changes, coach reviews, decider decisions) and a filterable activity log. Every chart has a
+tooltip and a table view, and the page follows your light or dark theme.
+
+It only reads; it cannot place an order. It binds to localhost. On a VPS, run
+`deploy/simplebot-dashboard.service` and open an SSH tunnel
+(`ssh -L 8787:127.0.0.1:8787 user@vps`) rather than exposing the port.
+
 ## config.yaml
 
 | Key | Meaning |
@@ -321,7 +343,8 @@ adds a hook that blocks commits containing anything that looks like a key, plus 
 config.yaml                 the only file you edit
 .env.example                keys and tokens go in .env (git-ignored)
 simplebot/
-  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments
+  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard
+  dashboard.py + .html      the local dashboard (reads the journal and reports; never trades)
   config.py sessions.py     config loading/validation, exchange hours
   data.py                   bar providers and the parquet cache
   costs.py                  the cost model
