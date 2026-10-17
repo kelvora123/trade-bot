@@ -1,0 +1,273 @@
+{
+  "name": "trade-bot / daily run + push to GitHub",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 22 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "every-weekday-22:00",
+      "name": "Every weekday 22:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "cd /data/trade-bot && git checkout main && git pull --ff-only origin main"
+      },
+      "id": "pull-latest-code",
+      "name": "Pull latest code",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "command": "cd /data/trade-bot && python3 -m tradebot.cli run --json"
+      },
+      "id": "run-the-bot",
+      "name": "Run the bot",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "exit-ok",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              },
+              "leftValue": "={{ $json.exitCode }}",
+              "rightValue": 0
+            }
+          ]
+        }
+      },
+      "id": "run-succeeded?",
+      "name": "Run succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect the run's artefacts and turn each into a GitHub Contents API payload.\n// Base64 is what the API expects; Buffer is available in n8n's Code node.\nconst owner  = $vars.GH_OWNER  || 'kelvora123';\nconst repo   = $vars.GH_REPO   || 'trade-bot';\nconst branch = $vars.GH_BRANCH || 'main';\n\nconst fs = require('fs');\nconst path = require('path');\nconst repoDir = $vars.REPO_DIR || '/data/trade-bot';\n\n// Only the run outputs: reports, chain snapshots, and the SQLite history.\nconst wanted = [];\nfor (const dir of ['reports', 'snapshots']) {\n  const abs = path.join(repoDir, dir);\n  if (!fs.existsSync(abs)) continue;\n  for (const f of fs.readdirSync(abs)) {\n    if (f.startsWith('.')) continue;\n    wanted.push(path.join(dir, f));\n  }\n}\n\nconst asof = new Date().toISOString().slice(0, 10);\nreturn wanted.map((rel) => ({\n  json: {\n    owner, repo, branch,\n    filePath: rel,\n    commitMessage: `data: portfolio run ${asof}`,\n    contentBase64: fs.readFileSync(path.join(repoDir, rel)).toString('base64'),\n    apiUrl: `https://api.github.com/repos/${owner}/${repo}/contents/${rel}`,\n  },\n}));"
+      },
+      "id": "collect-artefacts",
+      "name": "Collect artefacts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.apiUrl }}",
+        "method": "GET",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ref",
+              "value": "={{ $json.branch }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-existing-sha",
+      "name": "Get existing SHA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        180
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Pair each lookup result back with its prepared payload.\nconst prepared = $('Collect artefacts').all()[$itemIndex].json;\nconst sha = $json && $json.sha ? $json.sha : undefined;\nreturn { json: { ...prepared, sha } };"
+      },
+      "id": "merge-sha-with-payload",
+      "name": "Merge SHA with payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.apiUrl }}",
+        "method": "PUT",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message: $json.commitMessage, content: $json.contentBase64, branch: $json.branch, ...($json.sha ? { sha: $json.sha } : {}) }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 600
+            }
+          }
+        }
+      },
+      "id": "commit-to-github",
+      "name": "Commit to GitHub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Surface stderr so the run is debuggable from the n8n execution log.\nreturn [{ json: { ok: false, stderr: $json.stderr || '', exitCode: $json.exitCode } }];"
+      },
+      "id": "log-failure",
+      "name": "Log failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Every weekday 22:00": {
+      "main": [
+        [
+          {
+            "node": "Pull latest code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pull latest code": {
+      "main": [
+        [
+          {
+            "node": "Run the bot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run the bot": {
+      "main": [
+        [
+          {
+            "node": "Run succeeded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run succeeded?": {
+      "main": [
+        [
+          {
+            "node": "Collect artefacts",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect artefacts": {
+      "main": [
+        [
+          {
+            "node": "Get existing SHA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get existing SHA": {
+      "main": [
+        [
+          {
+            "node": "Merge SHA with payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge SHA with payload": {
+      "main": [
+        [
+          {
+            "node": "Commit to GitHub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "trade-bot"
+    }
+  ]
+}

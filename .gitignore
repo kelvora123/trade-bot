@@ -21,3 +21,14 @@ dist/
 *.egg-info/
 .venv/
 venv/
+
+# tradebot (options analytics)
+.coverage
+htmlcov/
+config/portfolio.yaml
+data/
+snapshots/*.json
+reports/*.md
+reports/*.json
+!reports/.gitkeep
+!snapshots/.gitkeep

@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "simplebot"
 version = "0.1.0"
-description = "A small, readable, paper-first day-trading bot: one config file, one command to backtest, one to paper trade, one to go live."
+description = "Two paper-first tools in one repo: simplebot, a day-trading bot, and tradebot, layered options-portfolio analytics."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,22 +15,21 @@ dependencies = [
   "pyyaml>=6",
   "python-dotenv>=1.0",
   "requests>=2.31",
+  "yfinance>=0.2.40",
 ]
 
 [project.optional-dependencies]
 claude = ["anthropic>=1.0"]
 ibkr = ["ib_async>=1.0"]
-dev = ["pytest>=8", "ruff>=0.5"]
+dev = ["pytest>=8", "pytest-cov>=4.1", "ruff>=0.5"]
 
 [project.scripts]
 simplebot = "simplebot.main:main"
-
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+tradebot = "tradebot.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["simplebot*"]
+where = [".", "src"]
+include = ["simplebot*", "tradebot*"]
 
 [tool.setuptools.package-data]
 simplebot = ["*.html"]
@@ -37,8 +40,15 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+# UP042: tradebot's enums are (str, Enum) on purpose; StrEnum changes str() and so report output.
+ignore = ["B008", "UP042"]
+
+[tool.ruff.lint.pycodestyle]
+# The formatter wraps at 100, but it cannot split a long SQL or HTML string literal.
+# Flag only the lines it had no way to shorten.
+max-line-length = 110
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "src"]
 addopts = "-q"

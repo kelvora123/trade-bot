@@ -13,6 +13,16 @@ that must pass a backtest gate before anything is applied.
 > to let you test that for yourself safely, with every cost switched on, before any real money
 > is involved. Expect most backtests to say "no".
 
+## Two tools in this repo
+
+- **Simplebot** (`simplebot/`, `python -m simplebot`) is the day-trading bot described below.
+- **Tradebot** (`src/tradebot/`, `tradebot`) is a separate options-portfolio analytics system:
+  it values a book, analyses its exposures, reads the market environment and writes a dated
+  report, driven by n8n or GitHub Actions. It places no orders. See
+  [docs/TRADEBOT.md](docs/TRADEBOT.md).
+
+Both are paper-only and share nothing but this repo, the CI workflow and `.env`.
+
 ## What you get
 
 - `backtest`: walk-forward (first 70% of days trains, last 30% is out of sample), always after

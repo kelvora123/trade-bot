@@ -22,5 +22,7 @@ jobs:
       - run: ruff format --check .
       - run: python scripts/secret_scan.py --all
       - run: pytest -q
+      - name: validate n8n workflow JSON
+        run: python scripts/validate_n8n.py
       - name: backtest smoke test (synthetic data, no network)
         run: python -m simplebot backtest --data synthetic --days 30

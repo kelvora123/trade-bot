@@ -1,0 +1,154 @@
+{
+  "name": "trade-bot / dispatch GitHub Actions run",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 22 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "every-weekday-22:00",
+      "name": "Every weekday 22:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $vars.GH_OWNER }}/{{ $vars.GH_REPO }}/actions/workflows/daily-run.yml/dispatches",
+        "method": "POST",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ ref: $vars.GH_BRANCH || \"main\" }) }}",
+        "options": {}
+      },
+      "id": "dispatch-workflow",
+      "name": "Dispatch workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 4,
+        "unit": "minutes"
+      },
+      "id": "wait-for-the-run",
+      "name": "Wait for the run",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "trade-bot-wait"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $vars.GH_OWNER }}/{{ $vars.GH_REPO }}/contents/reports/latest.json",
+        "method": "GET",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.raw+json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-latest-report",
+      "name": "Fetch latest report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten the run into the handful of numbers worth alerting on.\nconst r = $json;\nconst v = r.layer1_valuation || {};\nconst a = r.layer2_analytics || {};\nconst g = a.aggregate_greeks || {};\nreturn [{ json: {\n  asof: r.asof,\n  equity: (r.paper_account || {}).equity,\n  unrealised_pnl: (v.totals || {}).unrealised_pnl,\n  daily_theta: g.daily_theta_dollars,\n  net_delta: g.net_delta_shares,\n  concentration_flags: ((a.allocation || {}).concentration_flags || [])\n      .map((f) => f.message),\n  expiring_soon: (a.expiry_watch || []).map((e) => e.fact),\n  macro: r.layer3_macro ? `${r.layer3_macro.score}/100 (${r.layer3_macro.regime})` : null,\n  llm_calls: ((r.layer3_news || {}).usage || {}).api_calls || 0,\n} }];"
+      },
+      "id": "summarise",
+      "name": "Summarise",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Every weekday 22:00": {
+      "main": [
+        [
+          {
+            "node": "Dispatch workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch workflow": {
+      "main": [
+        [
+          {
+            "node": "Wait for the run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for the run": {
+      "main": [
+        [
+          {
+            "node": "Fetch latest report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch latest report": {
+      "main": [
+        [
+          {
+            "node": "Summarise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "trade-bot"
+    }
+  ]
+}
