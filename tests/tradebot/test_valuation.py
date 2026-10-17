@@ -46,7 +46,7 @@ def test_shares_mark_at_spot(cfg, store, aapl_shares):
 def test_option_value_uses_contract_multiplier(cfg, store, nvda_call):
     r = value_book([nvda_call], {"NVDA": make_chain()}, {"NVDA": 185.0}, cfg, ASOF, store)
     p = r.positions[0]
-    assert p.mark == pytest.approx(13.0)         # intrinsic 5 + 8
+    assert p.mark == pytest.approx(13.0)  # intrinsic 5 + 8
     assert p.current_value == pytest.approx(2600.0)  # 13 x 2 x 100
     assert p.cost_value == pytest.approx(2500.0)
     assert p.dte == (EXPIRY - ASOF).days
@@ -55,8 +55,8 @@ def test_option_value_uses_contract_multiplier(cfg, store, nvda_call):
 def test_option_greeks_are_position_scaled(cfg, store, nvda_call):
     r = value_book([nvda_call], {"NVDA": make_chain()}, {"NVDA": 185.0}, cfg, ASOF, store)
     p = r.positions[0]
-    assert 0 < p.delta < 200            # 2 long calls, max 200 deltas
-    assert p.theta < 0                  # long options decay
+    assert 0 < p.delta < 200  # 2 long calls, max 200 deltas
+    assert p.theta < 0  # long options decay
     assert p.vega > 0
     assert p.iv == pytest.approx(0.4135, abs=1e-3)
 
@@ -135,7 +135,12 @@ def test_atm_iv_is_recorded_for_rank_history(cfg, store, nvda_call):
 
 def test_totals_exclude_unmarkable_positions(cfg, store, nvda_call, aapl_shares):
     r = value_book(
-        [nvda_call, aapl_shares], {"NVDA": make_chain()}, {"NVDA": 185.0, "AAPL": None}, cfg, ASOF, store
+        [nvda_call, aapl_shares],
+        {"NVDA": make_chain()},
+        {"NVDA": 185.0, "AAPL": None},
+        cfg,
+        ASOF,
+        store,
     )
     assert r.total_value == pytest.approx(2600.0)
     assert r.total_cost == pytest.approx(2500.0)

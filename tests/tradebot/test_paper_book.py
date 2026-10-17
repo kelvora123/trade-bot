@@ -86,7 +86,7 @@ def test_short_position_loses_when_price_rises(broker):
 def test_crossing_zero_closes_old_side_and_opens_new(broker, store):
     broker.buy(opt(), 1, mark=0.40, bid=0.40, ask=0.40)
     ch = broker.sell(opt(), 3, mark=0.60, bid=0.60, ask=0.60).change
-    assert ch.qty_after == -2               # now short the remainder
+    assert ch.qty_after == -2  # now short the remainder
     assert ch.avg_after == pytest.approx(0.60)  # reopened at the fill price
     assert ch.closed_qty == 1
     assert len(store.closed_trades()) == 1
@@ -112,8 +112,8 @@ def test_realised_pnl_reconciles_with_cash(cfg, store):
 def test_partial_close_amortises_entry_cost_proportionally(cfg, store):
     cfg.paper.starting_cash = 10_000.0
     b = PaperBroker(cfg, store)
-    b.buy(opt(), 4, mark=0.40, bid=0.40, ask=0.40)        # entry cost 4 x 0.65
-    b.sell(opt(), 1, mark=0.40, bid=0.40, ask=0.40)       # flat on price
+    b.buy(opt(), 4, mark=0.40, bid=0.40, ask=0.40)  # entry cost 4 x 0.65
+    b.sell(opt(), 1, mark=0.40, bid=0.40, ask=0.40)  # flat on price
     trade = store.closed_trades()[0]
     # One quarter of the entry cost, plus this exit's own commission.
     assert trade["costs"] == pytest.approx(0.65 + (4 * 0.65) / 4)
@@ -192,7 +192,10 @@ def test_performance_withholds_annualised_on_short_sample():
 
 
 def test_performance_annualises_once_sample_is_long_enough():
-    curve = [(f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}", 100.0 + i) for i in range(MIN_DAYS_FOR_ANNUAL + 5)]
+    curve = [
+        (f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}", 100.0 + i)
+        for i in range(MIN_DAYS_FOR_ANNUAL + 5)
+    ]
     assert compute_performance(curve, []).annualised_return_pct is not None
 
 

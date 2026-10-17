@@ -25,8 +25,14 @@ class FakeProvider:
     def history_closes(self, ticker, lookback_days):
         self.calls.append(ticker)
         n = 260
-        base = {"^VIX": self.vix, "^VIX3M": self.vix3m, "SPY": 500.0, "RSP": 170.0,
-                "HYG": 79.0, "TLT": 88.0}.get(ticker, 100.0)
+        base = {
+            "^VIX": self.vix,
+            "^VIX3M": self.vix3m,
+            "SPY": 500.0,
+            "RSP": 170.0,
+            "HYG": 79.0,
+            "TLT": 88.0,
+        }.get(ticker, 100.0)
         step = 0.02 if self.trend else -0.02
         return [(ASOF - timedelta(days=n - i), base + i * step) for i in range(n)]
 
@@ -41,7 +47,14 @@ class FakeProvider:
 
     def headlines(self, ticker, lookback_days):
         self.calls.append(f"news:{ticker}")
-        return [{"title": f"{ticker} reports earnings", "publisher": "Reuters", "ts": 1.0, "summary": ""}]
+        return [
+            {
+                "title": f"{ticker} reports earnings",
+                "publisher": "Reuters",
+                "ts": 1.0,
+                "summary": "",
+            }
+        ]
 
 
 # ------------------------------------------------------------------- scoring
@@ -50,8 +63,8 @@ class FakeProvider:
 def test_linear_score_clamps_and_inverts():
     assert linear_score(12, 40, 12) == 100.0
     assert linear_score(40, 40, 12) == 0.0
-    assert linear_score(100, 40, 12) == 0.0   # clamped
-    assert linear_score(0, 40, 12) == 100.0   # clamped
+    assert linear_score(100, 40, 12) == 0.0  # clamped
+    assert linear_score(0, 40, 12) == 100.0  # clamped
 
 
 def test_linear_score_degenerate_range_is_midpoint():
@@ -88,8 +101,10 @@ def test_low_vix_scores_calmer_than_high_vix(cfg):
 def test_backwardation_scores_worse_than_contango(cfg):
     contango = compute_macro_gate(FakeProvider(vix=16.0, vix3m=20.0), cfg, ASOF)
     backward = compute_macro_gate(FakeProvider(vix=20.0, vix3m=16.0), cfg, ASOF)
-    assert contango.components["vix_term_structure"]["score"] > \
-        backward.components["vix_term_structure"]["score"]
+    assert (
+        contango.components["vix_term_structure"]["score"]
+        > backward.components["vix_term_structure"]["score"]
+    )
     assert "contango" in contango.components["vix_term_structure"]["state"]
 
 
@@ -115,8 +130,9 @@ def test_total_feed_failure_yields_neutral_unknown(cfg):
 
 
 def test_weights_must_sum_to_one():
-    bad = MacroWeights(vix_level=0.5, vix_percentile=0.5, vix_term_structure=0.5,
-                       breadth=0.0, credit_spread=0.0)
+    bad = MacroWeights(
+        vix_level=0.5, vix_percentile=0.5, vix_term_structure=0.5, breadth=0.0, credit_spread=0.0
+    )
     with pytest.raises(ValueError, match="must sum to 1.0"):
         bad.validate()
 
@@ -153,7 +169,7 @@ def test_market_buy_fills_above_mid(cfg, store, nvda_call):
     cfg.paper.starting_cash = 10_000.0
     b = PaperBroker(cfg, store)
     fill = b.buy(nvda_call, 1, mark=13.0, bid=12.75, ask=13.25)
-    assert fill.price > 13.0          # crossed the spread
+    assert fill.price > 13.0  # crossed the spread
     assert fill.slippage > 0
 
 
@@ -251,8 +267,10 @@ def test_news_cache_hit_avoids_api_call(cfg, store, monkeypatch):
     cfg.news.enabled = True
     grouped = {"NVDA": [{"title": "NVDA reports earnings"}]}
     store.put_news_cache(
-        _cache_key(cfg.news.model, grouped), ASOF,
-        {"per_ticker": [{"ticker": "NVDA", "sentiment": "neutral"}]}, "now",
+        _cache_key(cfg.news.model, grouped),
+        ASOF,
+        {"per_ticker": [{"ticker": "NVDA", "sentiment": "neutral"}]},
+        "now",
     )
     r = analyse_news(FakeProvider(), ["NVDA"], cfg, store, ASOF)
     assert r.cached and r.api_calls == 0

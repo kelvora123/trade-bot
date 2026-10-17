@@ -26,8 +26,16 @@ def series(n=200, drift=0.0015, vol=0.012, seed=11, start=100.0):
         px *= 1 + rng.gauss(drift, vol)
         hi = px * (1 + abs(rng.gauss(0, 0.005)))
         lo = px * (1 - abs(rng.gauss(0, 0.005)))
-        bars.append({"asof": f"d{i}", "open": px, "high": hi, "low": lo,
-                     "close": px, "volume": 1_000_000 * (1 + rng.random())})
+        bars.append(
+            {
+                "asof": f"d{i}",
+                "open": px,
+                "high": hi,
+                "low": lo,
+                "close": px,
+                "volume": 1_000_000 * (1 + rng.random()),
+            }
+        )
     return bars
 
 
@@ -53,8 +61,23 @@ def test_ema_matches_the_recurrence():
 
 
 def test_rsi_matches_wilders_published_example():
-    closes = [44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84,
-              46.08, 45.89, 46.03, 45.61, 46.28, 46.28]
+    closes = [
+        44.34,
+        44.09,
+        44.15,
+        43.61,
+        44.33,
+        44.83,
+        45.10,
+        45.42,
+        45.84,
+        46.08,
+        45.89,
+        46.03,
+        45.61,
+        46.28,
+        46.28,
+    ]
     assert ind.rsi(closes, 14)[14] == pytest.approx(70.5, abs=0.1)
 
 
@@ -81,8 +104,8 @@ def test_donchian_excludes_the_current_bar():
     highs = [1, 2, 3, 10, 4]
     lows = [1, 1, 1, 1, 1]
     dn, up = ind.donchian(highs, lows, 3)
-    assert up[3] == 3      # the prior three bars, not the 10 on bar 3
-    assert up[4] == 10     # now the 10 is in the window
+    assert up[3] == 3  # the prior three bars, not the 10 on bar 3
+    assert up[4] == 10  # now the 10 is in the window
 
 
 def test_bollinger_bands_straddle_the_mean():
@@ -162,7 +185,7 @@ def test_being_stopped_costs_the_configured_fraction():
     cfg = RiskConfig(risk_per_trade_pct=0.01, max_position_pct=1.0)
     s = size_position(equity=10_000, entry=100.0, stop=95.0, cfg=cfg)
     loss = s.qty * (100.0 - 95.0)
-    assert loss <= 100.0                      # never over the 1% budget
+    assert loss <= 100.0  # never over the 1% budget
     assert loss == pytest.approx(100.0, abs=5.0)  # and close to it
 
 
@@ -229,8 +252,15 @@ def test_var_unavailable_on_short_history():
 
 
 def test_excess_volatility_blocks_the_trade():
-    r = assess("T", [b["close"] for b in series()], 10_000, 100.0, 95.0,
-               RiskConfig(max_annual_vol=0.5), annual_vol=2.0)
+    r = assess(
+        "T",
+        [b["close"] for b in series()],
+        10_000,
+        100.0,
+        95.0,
+        RiskConfig(max_annual_vol=0.5),
+        annual_vol=2.0,
+    )
     assert any("exceeds" in b for b in r.blocks)
 
 
@@ -247,10 +277,12 @@ def test_risk_band_rises_with_volatility():
 def _proposal(bars, equity=100_000.0, cfg=None, **kw):
     cfg = cfg or RiskConfig(max_annual_vol=99.0)
     q = analyse("T", bars, "2026-09-18")
-    stop = q.close - q.atr * cfg.atr_stop_multiple if q.direction == "long" \
+    stop = (
+        q.close - q.atr * cfg.atr_stop_multiple
+        if q.direction == "long"
         else q.close + q.atr * cfg.atr_stop_multiple
-    r = assess("T", [b["close"] for b in bars], equity, q.close, stop, cfg,
-               q.volatility_annualised)
+    )
+    r = assess("T", [b["close"] for b in bars], equity, q.close, stop, cfg, q.volatility_annualised)
     return build_proposal(q, r, cfg, **kw)
 
 

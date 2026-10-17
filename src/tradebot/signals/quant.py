@@ -81,7 +81,8 @@ class QuantRead:
                 "conviction": r(self.conviction, 3),
             },
             "volatility": {
-                "annualised_pct": None if self.volatility_annualised is None
+                "annualised_pct": None
+                if self.volatility_annualised is None
                 else round(self.volatility_annualised * 100, 2),
                 "atr": r(self.atr, 4),
                 "atr_pct_of_price": None if self.atr_pct is None else round(self.atr_pct * 100, 2),
@@ -102,8 +103,9 @@ class QuantRead:
         }
 
 
-def _measured_hit_rate(closes: list[float], long_bias: bool, horizon: int = 10
-                       ) -> tuple[float | None, int]:
+def _measured_hit_rate(
+    closes: list[float], long_bias: bool, horizon: int = 10
+) -> tuple[float | None, int]:
     """Historical frequency that the trend filter was followed by a gain.
 
     Deliberately crude and deliberately honest: it walks this series' own
@@ -153,7 +155,7 @@ def analyse(ticker: str, bars: list[dict], asof: str) -> QuantRead:
     fast, slow = _last(ind.ema(closes, 20)), _last(ind.ema(closes, 50))
     sl = _last(ind.slope(closes, 20))
     if fast is not None and slow is not None and slow > 0:
-        sep = (fast - slow) / slow                      # EMA separation
+        sep = (fast - slow) / slow  # EMA separation
         stack = _scale(sep, -0.06, 0.06)
         tilt = _scale(sl or 0.0, -0.004, 0.004)
         read.trend_score = 0.6 * stack + 0.4 * tilt

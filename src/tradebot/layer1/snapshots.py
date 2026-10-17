@@ -27,7 +27,12 @@ def snapshot_path(root: Path, ticker: str, asof: date) -> Path:
 
 
 def write_snapshot(
-    snapshots_dir: Path, store: Store, ticker: str, asof: date, rows: list[ChainRow], spot: float | None
+    snapshots_dir: Path,
+    store: Store,
+    ticker: str,
+    asof: date,
+    rows: list[ChainRow],
+    spot: float | None,
 ) -> Path:
     """Persist the full pulled chain to a dated JSON file and mirror to SQLite."""
     snapshots_dir.mkdir(parents=True, exist_ok=True)

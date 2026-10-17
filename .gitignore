@@ -1,18 +1,30 @@
+# secrets
+.env
+*.env
+!.env.example
+
+# runtime state
+cache/
+reports/
+*.sqlite
+*.sqlite-journal
+simplebot/strategies/proposed/
+
+# python
 __pycache__/
-*.py[cod]
-.venv/
-venv/
-*.egg-info/
-build/
-dist/
+*.pyc
 .pytest_cache/
 .ruff_cache/
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
+# tradebot (options analytics)
 .coverage
 htmlcov/
-
-.env
 config/portfolio.yaml
-
 data/
 snapshots/*.json
 reports/*.md

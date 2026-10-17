@@ -105,7 +105,9 @@ def price(s: float, k: float, t: float, r: float, sigma: float, kind: str, q: fl
     return k * disc_r * norm_cdf(-d2) - s * disc_q * norm_cdf(-d1)
 
 
-def greeks(s: float, k: float, t: float, r: float, sigma: float, kind: str, q: float = 0.0) -> Greeks:
+def greeks(
+    s: float, k: float, t: float, r: float, sigma: float, kind: str, q: float = 0.0
+) -> Greeks:
     """Full Greek set for one share of the underlying contract."""
     kind = _validate(s, k, sigma, kind)
 
@@ -132,7 +134,9 @@ def greeks(s: float, k: float, t: float, r: float, sigma: float, kind: str, q: f
         rho_annual = k * t * disc_r * norm_cdf(d2)
     else:
         delta = disc_q * (norm_cdf(d1) - 1.0)
-        theta_annual = common_theta + r * k * disc_r * norm_cdf(-d2) - q * s * disc_q * norm_cdf(-d1)
+        theta_annual = (
+            common_theta + r * k * disc_r * norm_cdf(-d2) - q * s * disc_q * norm_cdf(-d1)
+        )
         rho_annual = -k * t * disc_r * norm_cdf(-d2)
 
     return Greeks(

@@ -118,7 +118,7 @@ class PaperBook:
         symbol = holding.occ_symbol()
         signed = qty if side == "buy" else -qty
         mult = holding.contract_multiplier
-        now = (asof.isoformat() if asof else utcnow().isoformat())
+        now = asof.isoformat() if asof else utcnow().isoformat()
 
         existing = self.store.get_position(symbol)
         if existing is None:
@@ -134,9 +134,15 @@ class PaperBook:
 
         # --- adding to the same side: weighted average --------------------
         if _sign(signed) == _sign(old_qty) or abs(old_qty) < 1e-12:
-            new_avg = (old_qty * old_avg + signed * price) / new_qty if abs(new_qty) > 1e-12 else price
+            new_avg = (
+                (old_qty * old_avg + signed * price) / new_qty if abs(new_qty) > 1e-12 else price
+            )
             self._write(
-                holding, new_qty, new_avg, opened_at, realised_so_far,
+                holding,
+                new_qty,
+                new_avg,
+                opened_at,
+                realised_so_far,
                 entry_costs=entry_costs + costs,
             )
             return PositionChange(symbol, old_qty, new_qty, old_avg, new_avg)
@@ -156,9 +162,17 @@ class PaperBook:
         if abs(new_qty) < 1e-12:
             # Flat: record the round-trip and drop the position row.
             self.store.record_trade(
-                symbol=symbol, ticker=holding.ticker, opened_at=opened_at, closed_at=now,
-                qty=closed, entry_price=old_avg, exit_price=price, multiplier=mult,
-                pnl=pnl, costs=total_costs, reason=reason,
+                symbol=symbol,
+                ticker=holding.ticker,
+                opened_at=opened_at,
+                closed_at=now,
+                qty=closed,
+                entry_price=old_avg,
+                exit_price=price,
+                multiplier=mult,
+                pnl=pnl,
+                costs=total_costs,
+                reason=reason,
             )
             self.store.delete_position(symbol)
             return PositionChange(symbol, old_qty, 0.0, old_avg, 0.0, pnl, closed, True)
@@ -166,21 +180,41 @@ class PaperBook:
         if _sign(new_qty) == _sign(old_qty):
             # Partial reduction: average price is unchanged on what remains.
             self.store.record_trade(
-                symbol=symbol, ticker=holding.ticker, opened_at=opened_at, closed_at=now,
-                qty=closed, entry_price=old_avg, exit_price=price, multiplier=mult,
-                pnl=pnl, costs=total_costs, reason=reason,
+                symbol=symbol,
+                ticker=holding.ticker,
+                opened_at=opened_at,
+                closed_at=now,
+                qty=closed,
+                entry_price=old_avg,
+                exit_price=price,
+                multiplier=mult,
+                pnl=pnl,
+                costs=total_costs,
+                reason=reason,
             )
             self._write(
-                holding, new_qty, old_avg, opened_at, realised_so_far + pnl,
+                holding,
+                new_qty,
+                old_avg,
+                opened_at,
+                realised_so_far + pnl,
                 entry_costs=entry_costs - entry_share,
             )
             return PositionChange(symbol, old_qty, new_qty, old_avg, old_avg, pnl, closed)
 
         # --- crossing zero: close the old side, open the remainder --------
         self.store.record_trade(
-            symbol=symbol, ticker=holding.ticker, opened_at=opened_at, closed_at=now,
-            qty=closed, entry_price=old_avg, exit_price=price, multiplier=mult,
-            pnl=pnl, costs=total_costs, reason=f"{reason} (reversed)".strip(),
+            symbol=symbol,
+            ticker=holding.ticker,
+            opened_at=opened_at,
+            closed_at=now,
+            qty=closed,
+            entry_price=old_avg,
+            exit_price=price,
+            multiplier=mult,
+            pnl=pnl,
+            costs=total_costs,
+            reason=f"{reason} (reversed)".strip(),
         )
         self._write(holding, new_qty, price, now, 0.0, entry_costs=0.0)
         return PositionChange(symbol, old_qty, new_qty, old_avg, price, pnl, closed, False)

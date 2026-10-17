@@ -1,11 +1,11 @@
 """Command-line entry point.
 
-    tradebot run          # all layers, write reports
-    tradebot run --offline --no-news
-    tradebot value        # layer 1 only
-    tradebot macro        # layer 3a only (deterministic, free)
-    tradebot paper ...    # paper account operations
-    tradebot usage        # what the LLM layer has cost so far
+tradebot run          # all layers, write reports
+tradebot run --offline --no-news
+tradebot value        # layer 1 only
+tradebot macro        # layer 3a only (deterministic, free)
+tradebot paper ...    # paper account operations
+tradebot usage        # what the LLM layer has cost so far
 """
 
 from __future__ import annotations
@@ -96,8 +96,13 @@ def cmd_run(args: argparse.Namespace) -> int:
                 for bar in provider.history_ohlcv(ticker, 400):
                     try:
                         store.record_ohlcv(
-                            date.fromisoformat(bar["asof"]), ticker, bar["open"],
-                            bar["high"], bar["low"], bar["close"], bar.get("volume"),
+                            date.fromisoformat(bar["asof"]),
+                            ticker,
+                            bar["open"],
+                            bar["high"],
+                            bar["low"],
+                            bar["close"],
+                            bar.get("volume"),
                         )
                     except (ValueError, KeyError) as exc:
                         log.debug("skipped bar for %s: %s", ticker, exc)
@@ -153,7 +158,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             "paper_account": paper_json,
             "growth_target": growth,
         }
-        markdown = render_markdown(val_json, ana_json, macro_json, news_json, diffs, paper_json, growth)
+        markdown = render_markdown(
+            val_json, ana_json, macro_json, news_json, diffs, paper_json, growth
+        )
         md_path, json_path = write_reports(cfg.path("reports_dir"), asof, markdown, payload)
         html_path = cfg.path("reports_dir") / f"dashboard_{asof:%Y-%m-%d}.html"
         html_path.write_text(render_standalone(payload))
@@ -224,11 +231,26 @@ def _holding_from_args(args: argparse.Namespace, store: Store) -> Holding:
         )
 
     if args.shares:
-        return Holding(args.symbol.upper(), AssetKind.SHARES, args.qty, args.price,
-                       target=args.target, stop=args.stop, multiplier=1)
+        return Holding(
+            args.symbol.upper(),
+            AssetKind.SHARES,
+            args.qty,
+            args.price,
+            target=args.target,
+            stop=args.stop,
+            multiplier=1,
+        )
 
-    missing = [f for f, v in (("--strike", args.strike), ("--expiry", args.expiry),
-                              ("--type", args.type), ("--ticker", args.ticker)) if not v]
+    missing = [
+        f
+        for f, v in (
+            ("--strike", args.strike),
+            ("--expiry", args.expiry),
+            ("--type", args.type),
+            ("--ticker", args.ticker),
+        )
+        if not v
+    ]
     if missing:
         raise ValueError(
             f"opening a new option position needs {', '.join(missing)} "
@@ -255,8 +277,15 @@ def cmd_trade(args: argparse.Namespace) -> int:
         broker = PaperBroker(cfg, store)
         holding = _holding_from_args(args, store)
         fn = broker.buy if args.command == "buy" else broker.sell
-        fill = fn(holding, abs(args.qty), mark=args.price, bid=args.bid, ask=args.ask,
-                  reason=args.reason, asof=asof)
+        fill = fn(
+            holding,
+            abs(args.qty),
+            mark=args.price,
+            bid=args.bid,
+            ask=args.ask,
+            reason=args.reason,
+            asof=asof,
+        )
         out = fill.to_json()
         out["cash_after"] = round(broker.cash, 2)
     print(json.dumps(out, indent=2))
@@ -277,8 +306,15 @@ def cmd_close(args: argparse.Namespace) -> int:
         holding = _holding_from_args(args, store)
         # A long position is closed by selling; a short by buying it back.
         fn = broker.sell if existing["qty"] > 0 else broker.buy
-        fill = fn(holding, args.qty, mark=args.price, bid=args.bid, ask=args.ask,
-                  reason=args.reason or "close", asof=asof)
+        fill = fn(
+            holding,
+            args.qty,
+            mark=args.price,
+            bid=args.bid,
+            ask=args.ask,
+            reason=args.reason or "close",
+            asof=asof,
+        )
         out = fill.to_json()
         out["cash_after"] = round(broker.cash, 2)
     print(json.dumps(out, indent=2))
@@ -332,8 +368,11 @@ def cmd_propose(args: argparse.Namespace) -> int:
     with Store(cfg.path("database")) as store:
         provider = _build_provider(args, store, asof)
         broker = PaperBroker(cfg, store)
-        equity = args.equity if args.equity else broker.cash + sum(
-            abs(p["qty"] * p["avg_price"] * p["multiplier"]) for p in store.all_positions()
+        equity = (
+            args.equity
+            if args.equity
+            else broker.cash
+            + sum(abs(p["qty"] * p["avg_price"] * p["multiplier"]) for p in store.all_positions())
         )
 
         if args.tickers:
@@ -350,28 +389,31 @@ def cmd_propose(args: argparse.Namespace) -> int:
             if not bars and not args.offline:
                 bars = store.ohlcv(ticker, asof, args.lookback)
             if len(bars) < 30:
-                results.append({
-                    "ticker": ticker,
-                    "action": "no_trade",
-                    "blocks": [
-                        f"Only {len(bars)} daily bars stored for {ticker}; 30 are needed. "
-                        "Run `tradebot run` (online) on a few sessions to accumulate history."
-                    ],
-                })
+                results.append(
+                    {
+                        "ticker": ticker,
+                        "action": "no_trade",
+                        "blocks": [
+                            f"Only {len(bars)} daily bars stored for {ticker}; 30 are needed. "
+                            "Run `tradebot run` (online) on a few sessions to accumulate history."
+                        ],
+                    }
+                )
                 continue
 
             quant = quant_analyse(ticker, bars, asof.isoformat())
             closes = [float(b["close"]) for b in bars]
             if quant.close is None or quant.atr is None:
-                results.append({"ticker": ticker, "action": "no_trade",
-                                "blocks": ["No usable price or ATR."]})
+                results.append(
+                    {"ticker": ticker, "action": "no_trade", "blocks": ["No usable price or ATR."]}
+                )
                 continue
 
             stop_dist = quant.atr * rcfg.atr_stop_multiple
-            stop = (quant.close - stop_dist if quant.direction == "long"
-                    else quant.close + stop_dist)
-            risk = risk_assess(ticker, closes, equity, quant.close, stop, rcfg,
-                               quant.volatility_annualised)
+            stop = quant.close - stop_dist if quant.direction == "long" else quant.close + stop_dist
+            risk = risk_assess(
+                ticker, closes, equity, quant.close, stop, rcfg, quant.volatility_annualised
+            )
             proposal = build_proposal(quant, risk, rcfg, args.min_conviction)
             entry = proposal.to_json()
             entry["quant"] = quant.to_json()
@@ -394,15 +436,19 @@ def cmd_propose(args: argparse.Namespace) -> int:
 
 
 def _print_proposals(payload: dict[str, Any]) -> None:
-    print(f"\nProposals for {payload['asof']}  (equity {payload['equity_used']:,.2f}, "
-          f"{payload['llm_calls']} LLM calls)\n")
+    print(
+        f"\nProposals for {payload['asof']}  (equity {payload['equity_used']:,.2f}, "
+        f"{payload['llm_calls']} LLM calls)\n"
+    )
     for r in payload["proposals"]:
         mark = "PROPOSE" if r.get("action") == "propose" else "no trade"
         print(f"  {r['ticker']:<8} {mark}")
         if r.get("action") == "propose":
-            print(f"    {r['direction']} {r['qty']} @ {r['entry']:,.4f}  "
-                  f"stop {r['stop']:,.4f}  target {r['target']:,.4f}  "
-                  f"R:R {r['reward_to_risk']:g}")
+            print(
+                f"    {r['direction']} {r['qty']} @ {r['entry']:,.4f}  "
+                f"stop {r['stop']:,.4f}  target {r['target']:,.4f}  "
+                f"R:R {r['reward_to_risk']:g}"
+            )
             for line in r.get("rationale", []):
                 print(f"      - {line}")
             if r.get("command"):
@@ -451,7 +497,11 @@ def cmd_paper(args: argparse.Namespace) -> int:
             holdings = {h.occ_symbol(): h for h in load_portfolio(cfg.path("portfolio"))}
             holding = holdings.get(args.check_affordable)
             if holding is None:
-                log.error("symbol %r not in portfolio. Known: %s", args.check_affordable, ", ".join(holdings))
+                log.error(
+                    "symbol %r not in portfolio. Known: %s",
+                    args.check_affordable,
+                    ", ".join(holdings),
+                )
                 return 1
             report = broker.affordability(holding, args.qty, args.mark)
             print(json.dumps(report, indent=2))
@@ -524,15 +574,23 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--news", action="store_true", help="force the Claude news layer on")
     run.add_argument("--no-news", action="store_true", help="force the Claude news layer off")
     run.add_argument("--no-macro", action="store_true", help="skip the macro gate")
-    run.add_argument("--target", type=float, default=400_000.0, help="growth target for the reality check")
-    run.add_argument("--book", choices=["auto", "paper", "file"], default="auto",
-                     help="which book to value (default: paper if it has positions)")
+    run.add_argument(
+        "--target", type=float, default=400_000.0, help="growth target for the reality check"
+    )
+    run.add_argument(
+        "--book",
+        choices=["auto", "paper", "file"],
+        default="auto",
+        help="which book to value (default: paper if it has positions)",
+    )
     run.set_defaults(func=cmd_run)
 
     for verb in ("buy", "sell"):
         t = sub.add_parser(verb, help=f"record a simulated {verb} (paper only)")
         t.add_argument("symbol", help="OCC symbol of an open position, or a ticker when opening")
-        t.add_argument("--qty", type=float, required=True, help="contracts, or shares with --shares")
+        t.add_argument(
+            "--qty", type=float, required=True, help="contracts, or shares with --shares"
+        )
         t.add_argument("--price", type=float, required=True, help="premium per share (not x100)")
         t.add_argument("--bid", type=float, help="for realistic spread-crossing slippage")
         t.add_argument("--ask", type=float)
@@ -552,8 +610,16 @@ def build_parser() -> argparse.ArgumentParser:
     cl.add_argument("--bid", type=float)
     cl.add_argument("--ask", type=float)
     cl.add_argument("--reason", default="")
-    cl.set_defaults(func=cmd_close, shares=False, ticker=None, type=None,
-                    strike=None, expiry=None, target=None, stop=None)
+    cl.set_defaults(
+        func=cmd_close,
+        shares=False,
+        ticker=None,
+        type=None,
+        strike=None,
+        expiry=None,
+        target=None,
+        stop=None,
+    )
 
     st = sub.add_parser("status", help="paper book, performance, and history progress")
     st.set_defaults(func=cmd_status)

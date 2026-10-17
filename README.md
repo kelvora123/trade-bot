@@ -1,432 +1,396 @@
-# trade-bot
+# Simplebot
 
-A layered options-portfolio analytics system. It values a book, analyses its
-exposures, reads the market environment, and writes a dated report — then
-pushes that report and the underlying data back to GitHub via n8n or GitHub
-Actions.
+A small, readable, **paper-first** day-trading bot for a UK retail account. One config file,
+one command to backtest, one to paper trade, one to go live. Deterministic Python makes every
+trading decision; an optional AI coach reviews the log after the close and proposes changes
+that must pass a backtest gate before anything is applied.
 
-It is built from a three-layer prompt architecture, with one deliberate change:
-**Claude is used as little as possible.** Layers 1 and 2 are pure arithmetic.
-Layer 3's macro gate is deterministic. Only the news reader calls an API, it is
-off by default, and when on it makes one batched, cached call per day for the
-whole book.
+> **Read this first.** The research behind this bot ([docs/RESEARCH.md](docs/RESEARCH.md))
+> found that, for a £100–£5,000 account, trading costs are larger than the edges the published
+> intraday strategies offer. The best-replicated strategy (opening range breakout on QQQ) breaks
+> even at about 2 cents per share of slippage, while Trading 212 charges a 0.15% FX fee on each
+> side of every USD trade, and UK retail accounts cannot buy SPY or QQQ at all. The bot exists
+> to let you test that for yourself safely, with every cost switched on, before any real money
+> is involved. Expect most backtests to say "no".
 
----
+## Two tools in this repo
 
-## Read this before you start
+- **Simplebot** (`simplebot/`, `python -m simplebot`) is the day-trading bot described below.
+- **Tradebot** (`src/tradebot/`, `tradebot`) is a separate options-portfolio analytics system:
+  it values a book, analyses its exposures, reads the market environment and writes a dated
+  report, driven by n8n or GitHub Actions. It places no orders. See
+  [docs/TRADEBOT.md](docs/TRADEBOT.md).
 
-**This is an analytics system, not an auto-trader.** It surfaces facts about
-your positions — what they are worth, what they are decaying at, where IV sits
-relative to its own history, what is expiring soon. It does not place orders,
-and by design it does not recommend them. The expiry watch reports that a
-contract has 12 days left and is losing $4.10/day; it will not tell you to roll
-it. That boundary is deliberate and the tests enforce it.
+Both are paper-only and share nothing but this repo, the CI workflow and `.env`.
 
-**Paper trading is the only execution mode, and that is enforced.**
-`execution.mode` accepts nothing but `paper`: the config loader rejects any
-other value, `PaperBroker` refuses to construct outside paper mode, and a test
-asserts no live-broker adapter is importable anywhere in the package. Live
-trading cannot be switched on by editing a config file.
+## What you get
 
-**On turning £100 into £400,000.** That is a 4,000× return. The system prints
-the arithmetic on every run, because it is the number that decides whether a
-plan is a plan:
+- `backtest`: walk-forward (first 70% of days trains, last 30% is out of sample), always after
+  commission, spread, slippage and FX fee, with a buy-and-hold benchmark and a
+  "random entry, same exits" benchmark on every report.
+- Three strategies, each a 30-line pure function: opening range breakout (`orb`),
+  intraday momentum (`intraday_momentum`) and VWAP reversion (`vwap_revert`).
+- Risk limits enforced in code, not in the strategy: max 0.5% of equity at risk per trade,
+  2% daily loss stop (flatten and stop for the day), max 3 open positions, flatten everything
+  10 minutes before the close.
+- `paper`: the same engine running live on the built-in simulator or on the Trading 212 demo
+  account, as a long-lived process, with every decision logged to SQLite and an optional daily
+  Telegram summary.
+- A learning loop: a deterministic walk-forward re-fit, plus an optional AI coach
+  (Claude via the Anthropic API, or a local model via Ollama) whose proposals are gated by
+  the backtest and never touch your risk settings.
+- Optional, off by default: Claude (or a local model) making buy and sell decisions inside
+  the trading loop, as a last resort when the rules have nothing, as a final say on every rule
+  signal, or as the primary decider. Sizing, stops, the daily loss stop and the end-of-day
+  flatten stay in code whatever it says. See "Claude in the loop".
+- `live`: only unlocks when `mode: live` is set **and** `SIMPLEBOT_LIVE_CONFIRM=yes` is in
+  `.env` **and** the strategy has passed Rule 6 (beats buy-and-hold out of sample after costs
+  and has 20+ paper days within the expected range).
 
-| Horizon | Compounded monthly return required |
-|---|---:|
-| 1 year | **99.6%/month** |
-| 2 years | **41.3%/month** |
-| 5 years | **14.8%/month** |
-| 10 years | **7.2%/month** |
-
-At 2%/month — a genuinely good sustained retail result — it takes **419 months
-(35 years)**. At 5%/month, sustained, which almost nobody achieves, 170 months.
-The returns required to do it "soon" are not a strategy problem; position sizes
-large enough to chase them are the most reliable way to reach £0 first.
-
-**There is also a hard structural floor.** One US equity option contract
-controls 100 shares, so a quoted premium of $1.20 costs **$120** plus
-commission. With £100 you can buy at most one cheap contract, with no
-diversification and no room for the risk controls this system is built around.
-The paper broker rejects unaffordable orders with the exact shortfall rather
-than pretending:
-
-```
-$ tradebot paper --check-affordable NVDA260320C00180000 --qty 1 --mark 13.0
-Not affordable: needs 1300.65 GBP, have 100.00, short 1200.65.
-```
-
-The realistic path is to run this in paper mode against a realistic simulated
-balance, accumulate the snapshot history the IV-rank layer needs (20 days
-minimum, 252 for a full ranking), and fund a real account only once the
-reports have told you something true for a few months.
-
----
-
-## Running paper-only
-
-The paper book is real state, not a simulation you re-seed each run: positions,
-average prices, realised P&L and the cash balance all persist in SQLite across
-runs.
-
-```bash
-# Open a position (a new option needs its terms; an existing one does not)
-tradebot buy F --qty 1 --price 0.30 --bid 0.28 --ask 0.32 \
-  --ticker F --type call --strike 12.0 --expiry 2026-06-19 \
-  --target 0.90 --stop 0.15
-
-# Add to it, trim it, or close it by OCC symbol
-tradebot buy   F260619C00012000 --qty 1 --price 0.40 --bid 0.38 --ask 0.42
-tradebot sell  F260619C00012000 --qty 1 --price 0.60 --bid 0.58 --ask 0.62
-tradebot close F260619C00012000 --price 0.55 --bid 0.53 --ask 0.57
-
-tradebot status        # book, performance, history progress
-tradebot run           # values the paper book by default
-```
-
-Pass `--bid` and `--ask` whenever you have them. Without them a fill happens at
-your quoted mark, which flatters every result; with them, a market order
-crosses the spread the way a real one does. On a cheap, wide contract that is
-not a rounding error — a £32 entry gave up £2.00, over 6%, in the worked
-example above.
-
-`tradebot run` values the **paper book** when it holds anything and falls back
-to `config/portfolio.yaml` otherwise; `--book paper|file` forces either. The
-run logs which one it used, so a populated paper book can never be silently
-valued against a stale file.
-
-### What to watch over the first few months
-
-`tradebot status` reports progress toward the two thresholds that gate the
-analytics:
-
-| | Needed | Why |
-|---|---|---|
-| Snapshot history | **20 days** | Below this, IV rank reports `building history` |
-| Full lookback | **252 days** | A rank over a full year of vol, not a fortnight |
-| Closed trades | **10+** | Below this, win rate and profit factor mean little |
-| Equity points | **60 days** | Below this, annualised return is withheld |
-
-That last one is deliberate: a 9% gain over eleven days annualises to a number
-that is worse than no number, so the field stays `None` with the reason
-printed. Same for profit factor before a first losing trade.
-
-**Max drawdown is measured on the equity curve, not on closed trades.** A book
-can show a clean run of winning round-trips while open positions bleed
-underneath; only the equity curve sees that.
-
-Realised P&L reconciles exactly against the cash balance — entry commissions
-are carried on the position and released pro-rata as it closes, rather than
-quietly inflating round-trip P&L. A test pins that invariant.
-
-### The dashboard
-
-Every `tradebot run` writes `reports/dashboard.html` alongside the Markdown and
-JSON — one self-contained file with no network dependency beyond its webfont,
-so it opens from a `file://` URL. `tradebot dashboard` re-renders it from a
-stored run without re-pulling market data.
-
-It leads with the aggregate Greeks, because on an options book net delta and
-daily theta are the numbers that decide what today looks like. Below that: the
-equity curve over an underwater drawdown panel (two panels sharing an x-scale,
-never two y-axes on one chart), the marked positions, allocation with
-concentration flags, unrealised P&L as diverging bars, IV rank meters with the
-cheap and rich bands shaded, and the expiry watch.
-
-One colour decision worth stating: **P&L uses blue for gain and red for loss,
-not green and red.** Red/green is exactly the pair red-green colourblind readers
-cannot separate, and sign is the most important thing on that chart. The
-categorical palette is validated for colourblind separation in both light and
-dark, and every bar carries a direct label rather than relying on its fill.
-
-Both themes are designed, not inverted. A demo dataset is available if you want
-to see it populated before you have history of your own:
-
-```bash
-python scripts/seed_demo.py --root /tmp/demo
-tradebot --root /tmp/demo --offline --asof 2026-09-18 run --no-news --no-macro
-open /tmp/demo/reports/dashboard.html
-```
-
----
-
-## The three layers
-
-### Layer 1 — Data & Valuation
-
-Pulls option chains, marks the book, computes Greeks.
-
-- **Mark** = mid `(bid+ask)/2` when both sides exist, else `last`. Shares mark
-  at spot. A zero bid is a real quote; a crossed book falls through to last.
-- **Greeks** from Black-Scholes computed locally in `layer1/blackscholes.py` —
-  stdlib `math` only, no scipy, no QuantLib. Uses the contract's own IV, a
-  configurable risk-free rate (default `0.045`), and *actual* calendar days to
-  expiry. Verified against reference values and put-call parity to machine
-  precision.
-- **Units**: vega is per 1 IV point and theta is per calendar day, scaled once
-  at the source so nothing downstream double-scales them.
-- **Snapshots**: every run writes the full chain to
-  `snapshots/TICKER_YYYY-MM-DD.json` and mirrors it to SQLite. This is not
-  logging — it is the input to Layer 2's IV rank and to new-strike detection.
-- **Degradation**: a missing contract, absent spot, or broken IV flags the
-  position and continues. A partial book is worth reporting; a crashed nightly
-  run is not. Chain IV outside a sane band is re-solved locally by bisection.
-
-### Layer 2 — Portfolio Analytics
-
-- **Allocation** by ticker and by sector (config lookup first, provider
-  metadata as fallback). Uses *absolute* value per line, so a short leg cannot
-  net away a long leg's weight and hide the concentration.
-- **Concentration flags** above a configurable ticker cap (default 40%) and
-  sector cap (default 60%). Informational only.
-- **Aggregate Greeks**: net delta in share-equivalents and in dollars, total
-  daily theta in dollars (what the book loses per day if nothing moves), net
-  vega per 1 IV point, net gamma.
-- **IV environment**: current IV plus rank and percentile over a configurable
-  lookback (default 252 days). Below `min_history_days` (default 20) it reports
-  `building history` rather than a meaningless number. Flags `rich` above 70
-  and `cheap` below 30.
-  - Ranked against an **underlying ATM-IV series**, not the contract's own IV:
-    a single contract's IV drifts as it ages for reasons unrelated to the vol
-    environment, which would make a 252-day rank meaningless.
-- **Expiry watch**: contracts inside a configurable DTE threshold (default 45)
-  with their daily theta in dollars and as a share of position value. States
-  facts; does not advise rolling.
-
-### Layer 3 — Macro Gate & News
-
-- **Macro gate** (`layer3/macro.py`): a deterministic 0–100 score — 100 calm,
-  0 stressed — blended from weighted components that must sum to 1.0: VIX
-  level, VIX 1-year percentile, VIX term structure (VIX vs VIX3M), breadth
-  (RSP/SPY as the proxy), and credit (HYG/TLT). Same data in, same score out;
-  a test asserts it. A missing feed is dropped and the remaining weights
-  renormalised, so a dead endpoint costs precision rather than silently
-  biasing the score to 50.
-- **News** (`layer3/news.py`): Claude summarises recent headlines per held
-  name — what happened, sentiment, key drivers, and whether it specifically
-  affects a position. See below.
-
----
-
-## Signals: computed, not prompted
-
-`tradebot propose` scores conditions, sizes the risk and constructs a candidate
-order. It makes **zero API calls**, because everything it produces is
-arithmetic over the stored price history.
-
-This layer is a deliberate port of the agent pipeline in
-[AutoHedge](https://github.com/The-Swarm-Corporation/AutoHedge) (MIT), which
-prompts GPT-4.1 agents to return `technical_score`, `volume_score`,
-`trend_strength`, `volatility`, `probability_score`, support/resistance levels,
-a position size and an entry/stop/target. Every one of those is computable from
-the price series, so this computes them:
-
-| AutoHedge | Here |
-|---|---|
-| Quant-Analyst agent → scores, volatility, key levels | `signals/quant.py` — EMA/RSI/ATR/Bollinger/Donchian arithmetic |
-| Risk-Manager agent → position size, drawdown, risk score | `signals/risk.py` — risk-per-trade sizing, historical VaR and Expected Shortfall |
-| Execution-Agent → order params, then **executes** | `signals/proposal.py` — constructs the order and **stops**; a human enters it |
-| Sentiment agent → headline reads | `layer3/news.py` — the one job that genuinely needs language; batched, cached, off by default |
-| **5 LLM calls per decision** | **0** |
-
-Asking a model for an RSI is strictly worse than computing one: it is
-non-reproducible, unverifiable, costs money per call, and can be wrong in ways
-nothing checks. A test asserts the whole pipeline is byte-identical across
-repeated runs — the property an agent chain cannot offer at any temperature.
-
-### Two things it deliberately does not do
-
-**It does not emit a probability.** AutoHedge's quant agent returns a
-`probability_score (0-1)`. A weighted blend of indicators is an *ordinal score*,
-not a calibrated probability, and sizing against it as though it were one is
-how accounts die. This emits `conviction` and says in the payload exactly what
-it is. Separately, where there are at least 10 historical instances of the same
-trend state, it reports `measured_hit_rate` — an observed frequency from the
-series' own history, with its sample count attached.
-
-**It does not execute.** AutoHedge places the order. Here the output is a
-proposal, printed with the exact `tradebot buy` command that would enter it.
-The build is paper-only and the signal layer holds no broker handle.
-
-### Sizing rule
-
-Position size comes from **risk-per-trade**, not a notional percentage: size so
-that price reaching the stop costs a fixed fraction of equity (default 1%).
-That makes a stopped trade cost the same whatever the instrument or its
-volatility — the property that actually keeps an account alive. A notional cap
-(25%) and a portfolio-heat cap (6% total open risk) sit on top, and the output
-always names which constraint bound the size. When no size clears every
-constraint it returns **zero with the reason**, rather than a token position
-that quietly breaches a limit.
-
-```
-$ tradebot propose --tickers NVDA,AAPL --equity 25000
-
-  NVDA     no trade
-      blocked: Realised volatility 202% exceeds the 150% ceiling; no size recommended.
-
-  AAPL     PROPOSE
-    long 16 @ 238.2000  stop 223.3932  target 267.8137  R:R 2
-      - Trend long on the 20/50 EMA stack (score 0.78)
-      - Size 16 risks 236.91 (0.95% of equity), bound by risk_per_trade
-    enter it with:  tradebot buy AAPL --qty 16 --price 238.2000 --shares ...
-```
-
----
-
-## How Claude usage is minimised
-
-The reference design runs **one API call per held name per day**. This one does
-the same job for a fraction of the spend:
-
-| | Reference | Here |
-|---|---|---|
-| Calls/day, 10-name book | 10 | **1** (batched) |
-| Unchanged headlines | re-billed daily | **served from cache, £0** |
-| Default state | on | **off** |
-| Model | unspecified | `claude-haiku-4-5` (configurable) |
-| Runaway protection | none | hard `max_calls_per_day` |
-
-1. **One batched call for the whole book.** The system prompt and instructions
-   are sent once instead of N times, which is where most input tokens go on a
-   small job.
-2. **Content-addressed cache.** The key is a hash of the model plus the exact
-   headline set, keyed on titles rather than timestamps (the same story is
-   re-emitted with fresh timestamps by different outlets). No new headline
-   means no API call. Markets are quiet most days — this is the largest saving.
-3. **Hard daily cap.** At `news.max_calls_per_day` the layer degrades and says
-   so, rather than spending more.
-4. **Haiku by default.** Summarising headlines is bulk extraction. Set
-   `news.model: claude-opus-5` if you want the stronger model on it.
-
-Layers 1, 2 and 3a never call an API at all. Track spend with `tradebot usage`.
-
----
-
-## Quick start
+## 15-minute setup
 
 ```bash
 git clone https://github.com/kelvora123/trade-bot.git && cd trade-bot
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-
-cp config/portfolio.example.yaml config/portfolio.yaml
-$EDITOR config/portfolio.yaml
-
-tradebot run --no-news          # full pipeline, zero API cost
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"          # add claude and/or ibkr extras if you want them: ".[dev,claude,ibkr]"
+cp .env.example .env             # fill in only what you use; .env is git-ignored
+python -m simplebot backtest     # ORB on QQQ+SPY, last 60 days of 5-minute Yahoo bars
 ```
 
-### Commands
+No internet or just curious? `python -m simplebot backtest --data synthetic` runs on fake data
+(clearly labelled; it says nothing about markets).
 
-| Command | What it does |
+The command prints one line per strategy and writes `reports/backtest_<strategy>_<time>.md`
+and `.html`. The report always states, out of sample and after costs: net return, max
+drawdown, Sharpe, number of trades, win rate, average R, total costs paid, and the same for
+buy-and-hold and for random entries with the same exits. If the trade count is under 30, the
+report says so: treat those numbers as noise.
+
+Useful variants:
+
+```bash
+python -m simplebot backtest --strategy all        # one comparison table for all strategies
+python -m simplebot backtest --grid                # grid-search params on the training window first
+python -m simplebot backtest --data alpaca --days 500   # years of 1m/5m US bars with a free Alpaca account
+python -m simplebot report                         # re-render the last saved report
+```
+
+## Paper trading
+
+```bash
+python -m simplebot paper
+```
+
+With `broker: paper` (the default) this runs the engine on the built-in simulator, which fills
+market orders at the latest price moved against you by half the spread plus slippage, and
+charges the configured fees. With `broker: trading212` and demo keys in `.env`, orders go to
+your Trading 212 **demo** account instead. Either way the bot:
+
+- polls bars every `poll_seconds` during market hours, feeds each completed bar to the engine,
+  and checks software stops against the latest price in between;
+- logs every signal, skip (with the reason), order, fill, exit, halt and daily summary to
+  `simplebot.sqlite`;
+- sends a daily summary to Telegram if `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` are set;
+- flattens everything on Ctrl-C / SIGTERM.
+
+Run it as a service: see [deploy/](deploy/) for a systemd unit (`simplebot-paper.service`), a
+timer for the coach, a Dockerfile and a compose file.
+
+## Dashboard
+
+```bash
+python -m simplebot dashboard            # http://127.0.0.1:8787, refreshes every 30 s
+python -m simplebot dashboard --demo     # seeded with synthetic paper trades, to see the layout
+python -m simplebot dashboard --static snapshot.html   # a self-contained page you can share
+```
+
+One page, read straight from the journal and the saved backtest, that answers "how is it
+doing?": a status strip (running or stale, market open or closed, halted, LLM decider and
+coach on or off), a range and symbol filter row, equity as the hero figure with P&L today and
+over the range, max drawdown, Sharpe, win rate and average R, costs paid and LLM spend; an
+equity curve with drawdown, daily P&L columns, open positions with unrealised P&L and the
+amount at risk, trade analytics by exit reason, symbol, entry hour and R-multiple, the latest
+backtest against buy-and-hold and random entry, the learning loop (Rule 6 gate, parameter
+changes, coach reviews, decider decisions) and a filterable activity log. Every chart has a
+tooltip and a table view, and the page follows your light or dark theme.
+
+It only reads; it cannot place an order. It binds to localhost. On a VPS, run
+`deploy/simplebot-dashboard.service` and open an SSH tunnel
+(`ssh -L 8787:127.0.0.1:8787 user@vps`) rather than exposing the port.
+
+### See it in a browser without installing anything
+
+- **GitHub Pages.** The `pages` workflow publishes the dashboard at
+  `https://<owner>.github.io/<repo>/` on every push to `main` (enable Pages once under
+  Settings, Pages, Source: GitHub Actions if the first run cannot do it itself). Without a
+  committed snapshot it shows a demo built from synthetic data; to publish your real numbers
+  see [dashboard/README.md](dashboard/README.md). A Pages snapshot is static.
+- **Codespaces.** Code, Create codespace on main. The container installs the bot, starts the
+  demo dashboard and opens it in a browser tab on port 8787. Run `python -m simplebot paper`
+  in the terminal and the same tab shows real paper trading. Codespaces stop when idle, so
+  for a bot that must run all day use a small VPS with the systemd units in `deploy/`.
+
+## config.yaml
+
+| Key | Meaning |
 |---|---|
-| `tradebot run` | All layers; writes `reports/report_YYYY-MM-DD.{md,json}` and `latest.*` |
-| `tradebot run --offline` | Replays stored snapshots — no network |
-| `tradebot run --no-news` | Forces the Claude layer off |
-| `tradebot run --book file` | Value `portfolio.yaml` instead of the paper book |
-| `tradebot buy` / `sell` | Record a simulated fill |
-| `tradebot close SYM --price P` | Close an open paper position in full |
-| `tradebot status` | Book, performance, and history progress |
-| `tradebot dashboard` | Re-render the HTML dashboard from a stored run |
-| `tradebot propose` | Deterministic trade proposals — no LLM, no execution |
-| `tradebot value` | Layer 1 only, as JSON |
-| `tradebot macro` | The deterministic macro gate only (free) |
-| `tradebot paper --check-affordable SYM --qty 1 --mark 13.0` | Prices a hypothetical order |
-| `tradebot usage` | Token spend and estimated cost to date |
+| `mode` | `paper` or `live`. Live also needs `SIMPLEBOT_LIVE_CONFIRM=yes` in `.env`. |
+| `broker` | `paper` (simulator), `trading212` (demo in paper mode, live in live mode) or `ibkr`. |
+| `account`, `account_currency` | Trading 212 account type; the FX fee applies to instruments in another currency. |
+| `symbols` | Yahoo-style symbols. LSE symbols end in `.L`. |
+| `timeframe` | `1m`, `5m` or `15m` bars. |
+| `strategy`, `params` | Which strategy and its parameters. `params` is the only line the learning loop ever rewrites. |
+| `starting_cash` | Backtest and simulator starting cash, in the instrument's currency. |
+| `allow_short` | Keep `false` for Trading 212 Invest/ISA accounts. |
+| `max_entries_per_day` | Per symbol. |
+| `risk.*` | Risk per trade %, daily loss %, max positions, flatten window. Never changed by code. |
+| `costs.*` | Commission per order, FX fee % per side, spread bps, slippage bps per side. |
+| `data.*` | Provider (`yahoo`, `alpaca`, `csv`, `synthetic`), lookback days, cache dir. |
+| `learning.*` | Re-fit cadence and the gate thresholds (minimum out-of-sample trades, minimum Sharpe gain). |
+| `coach.*` | `provider` (`none`, `claude`, `ollama`), model names, lookback, `auto_apply_params`, daily cost cap. |
+| `decider.*` | Claude in the trading loop: `provider`, `role` (`last_resort`, `final_say`, `primary`), model, `every_minutes`, `max_stop_pct`, `min_confidence`, `max_daily_cost_usd`, `effort`, `timeout_seconds`. |
+| `symbol_map` | Your symbol to the broker's ticker, e.g. `{EQQQ.L: EQQQl_EQ}`. |
+| `poll_seconds`, `journal_path`, `reports_dir`, `telegram` | Plumbing. |
 
-### Portfolio format
+## Writing a strategy
 
-`qty` is contracts for options (negative for short); `cost_basis` is the quoted
-premium **per share**, not premium × 100.
+A strategy is a module with one pure function. `bars` is every completed bar up to and
+including the one that just closed, for one symbol, in the exchange's timezone. Return a
+`Signal` to enter at the market now, or `None`. No I/O, no broker calls.
 
-```yaml
-holdings:
-  - ticker: NVDA
-    kind: option
-    option_kind: call
-    qty: 2
-    strike: 180.0
-    expiry: 2026-03-20
-    cost_basis: 12.50
-    target: 25.00
-    stop: 6.00
+```python
+# simplebot/strategies/my_breakout.py  (or any .py file: --strategy-file path/to/it.py)
+from simplebot.strategies import Signal
+from simplebot.strategies.common import daily_atr, today_bars
+
+DEFAULT_PARAMS = {"lookback": 6, "target_r": 3}
+PARAM_GRID = {"lookback": [3, 6, 12], "target_r": [2, 3, 5]}  # optional, for the learning loop
+
+
+def signal(bars, params):
+    p = {**DEFAULT_PARAMS, **params}
+    today = today_bars(bars)
+    if len(today) != p["lookback"] + 1:  # fire once, right after the lookback window
+        return None
+    high = float(today["high"].iloc[:-1].max())
+    close = float(today["close"].iloc[-1])
+    if close <= high:
+        return None
+    atr = daily_atr(bars) or close * 0.01
+    stop = close - 0.5 * atr
+    return Signal("long", close, stop, close + p["target_r"] * (close - stop), reason="breakout")
 ```
 
-### Enabling the news layer
+Register a built-in in `simplebot/strategies/__init__.py` or just point `--strategy-file` at it.
+Stops and targets are enforced by `risk.py`, exits at end of day too; the strategy only proposes.
+
+## Risk rules (all in `simplebot/risk.py`)
+
+- Position size = (equity x `risk_per_trade_pct`) / (entry - stop), capped by what cash can
+  buy after spread, slippage and fees. No leverage. Small accounts are usually cash-capped,
+  which the report counts (`cash_capped_entries`).
+- Daily loss stop: when equity falls `max_daily_loss_pct` below the day's starting equity,
+  everything is flattened and no new entries are taken until the next day.
+- Max open positions, max entries per symbol per day, no shorts unless `allow_short: true`.
+- End-of-day flatten `flatten_minutes_before_close` minutes before that exchange's close.
+- Software stops and targets: checked on every completed bar and on every poll in between.
+  If both are touched in one bar the stop is assumed to have hit first; gaps fill at the open,
+  never at the level.
+
+## Costs (always on)
+
+`costs.spread_bps` (half paid on each side), `costs.slippage_bps` (each side),
+`costs.commission` (per order) and `costs.fx_fee_pct` (each side, when the instrument's
+currency is not `account_currency`). Defaults model a Trading 212 GBP Invest account trading USD
+instruments: 0 commission, 0.15% FX each way, 2 bps spread, 3 bps slippage, which is a 0.38%
+round trip before the trade has done anything. Set `fx_fee_pct: 0` only if you have confirmed
+your account trades in the instrument's own currency. For Interactive Brokers use
+`commission: 1` (the USD 1 minimum) and a realistic slippage figure.
+
+## The learning loop
+
+Two layers, neither inside the trading loop, both gated.
+
+**The gate** (`simplebot/learn.py`): a challenger replaces the current parameters only if its
+out-of-sample, after-cost backtest beats the champion's Sharpe by `learning.min_sharpe_gain`
+with at least `learning.min_oos_trades` trades and a positive net return. Nothing bypasses it,
+and nothing automated can touch `risk:`.
+
+**Layer 1, deterministic:** `python -m simplebot refit` grid-searches each strategy's
+`PARAM_GRID` on the training window and sends the winner through the gate. If it passes, the
+`params:` line in `config.yaml` is rewritten (comments kept) and the change is recorded in the
+journal's `params_history`, which the backtest report lists with before/after Sharpe. Run it
+weekly from cron or a timer. Any applied change resets the 20-day paper clock for Rule 6.
+
+**Layer 2, the AI coach:** `python -m simplebot coach` runs once after the close, as its own
+process (never from the trading process):
+
+- reads the last `coach.lookback_days` of the decision log, the latest backtest, the parameter
+  history and its own previous notes, so it remembers what it already tried;
+- writes a plain-English review to `reports/coach/<date>.md` and up to three proposals as
+  structured JSON: `params` (new values for existing parameters), `filter` or `strategy`
+  (a Python file);
+- every `params` proposal goes through the gate; rejected ones are written back into the
+  coach's notes with the numbers. A proposal that passes is applied only if
+  `coach.auto_apply_params: true`, otherwise it is listed for you;
+- code proposals are written to `simplebot/strategies/proposed/`, backtested in a subprocess
+  with every secret stripped from the environment, and reported. They are never applied or
+  run in paper/live until you review them and merge them yourself;
+- `coach.provider: claude` uses the official `anthropic` SDK (`pip install -e ".[claude]"`,
+  `ANTHROPIC_API_KEY` in `.env`, model from `coach.model`); a daily review costs a few cents and
+  is capped by `coach.max_daily_cost_usd`. `coach.provider: ollama` uses a local model through
+  Ollama at `OLLAMA_HOST`, free and offline, with weaker proposals.
+- The coach never sees broker keys, cannot import the broker modules (a test enforces it), and
+  a refusal, timeout or error simply means "no proposal today".
+
+A coach cannot turn a losing edge into a winning one. It finds and tests hypotheses faster than
+you would. Most proposals should be rejected; that is the system working.
+
+## Claude in the loop (optional, off by default)
+
+This suspends hard rule 2 on purpose, at the owner's request. Set `decider.provider: claude`
+(or `ollama`) and pick a role:
+
+| `decider.role` | What happens |
+|---|---|
+| `last_resort` (default) | The rule-based strategy decides whenever it has a signal. Only when it has nothing is the model asked, at most every `every_minutes` per symbol, whether to buy, sell or hold. |
+| `final_say` | Every rule-based signal is sent to the model, which approves it, rejects it, or tightens the stop and target. The model never initiates a trade. |
+| `primary` | The model is asked every `every_minutes` whether to buy, sell, close or hold, with the rule-based signal shown as advice. It can also close an open position early. |
+
+What the model sees: today's bars, the last ten daily bars, VWAP, the opening range, ATR, the
+open position, the rule-based signal, the account state, the risk limits and the round-trip
+cost. What it answers: one structured JSON object with `action`, `stop_price`, `target_price`,
+`confidence` and a one-line `reason`. Every answer is journaled with its cost.
+
+What stays in code no matter what the model says:
+
+- position size from `risk_per_trade_pct` and the stop, capped by cash;
+- the stop must be on the correct side of the price and no further than `max_stop_pct`;
+  anything else is treated as hold; a stop that is too wide is tightened;
+- answers below `min_confidence` are hold;
+- the daily loss stop, max positions, max entries per day, `allow_short` and the end-of-day
+  flatten all apply to the model's trades exactly as to the rules';
+- once `max_daily_cost_usd` is spent the model is not asked again that day;
+- any error, timeout, refusal or unreadable answer means hold. The model never sees broker keys
+  and `decider.py` cannot import the broker modules (a test enforces it).
+
+Costs and speed: one decision is roughly 3,500 input tokens. On `claude-opus-5-5` that is about
+2 cents per call, so the default cadence of 30 minutes on two symbols is about 50 cents a
+trading day; `claude-sonnet-5-5` halves it and `claude-haiku-5-5` is near free. Each call takes
+a few seconds, which is fine for a loop that polls every 30 seconds.
+
+Backtesting it: `python -m simplebot backtest --llm --max-llm-cost 5` consults the model over
+the out-of-sample period only. The command prints the estimated number of calls and cost first
+and stops asking once the cap is hit. It is slow (every call is a real API round trip) and
+not deterministic: two runs give different trades. Rule 6 still applies: `check` compares the
+decider setting used in the saved backtest with the one in `config.yaml`, so a model-driven
+configuration has to earn its way to live like any other.
+
+Be clear-eyed about what this is. A language model reading a table of bars has no information
+edge over the rules, it adds latency and cost per decision, and it cannot be replayed. The
+honest reason to run it is to find out, on the demo account, whether it does better than the
+rules after costs. The journal and the daily summary will tell you.
+
+## Going live
+
+1. Run `python -m simplebot check`. It prints whether Rule 6 is met: a saved backtest for the
+   configured strategy that beats buy-and-hold on Sharpe out of sample after costs, matching
+   params, at least 20 paper trading days with trades, paper average R within 0.5R of the
+   backtest, and no more than two daily-loss halts.
+2. Set `mode: live` and a real broker in `config.yaml`, and `SIMPLEBOT_LIVE_CONFIRM=yes` in
+   `.env` (use live API keys).
+3. `python -m simplebot live`. It prints a loud banner and starts at whatever size your
+   `risk_per_trade_pct` and cash allow; keep both small.
+
+On any unexpected error in live mode the bot cancels open orders, flattens, sends an alert
+and stops. On Ctrl-C it flattens first.
+
+### Trading 212 specifics (from the research, verify against your account)
+
+- Authentication is HTTP Basic with the API key and secret from the app (Settings, API).
+  Demo and live keys are different.
+- **Live accepts market orders only through the API.** Stops and targets are therefore
+  software stops: the bot polls prices every `poll_seconds` and sends a market exit when a level
+  is crossed. **Gap risk:** a fast move or a feed outage can produce a loss larger than the
+  planned 0.5%. The daily loss stop limits the damage but cannot prevent it.
+- The API provides **no prices**. Bars come from the data provider; Yahoo quotes can lag.
+- UK retail accounts **cannot buy US-domiciled ETFs** (SPY, QQQ). Use LSE-listed UCITS
+  equivalents (EQQQ, CSPX/VUSA) in London hours, or US single stocks. Find the broker ticker
+  with `python -m simplebot instruments --search EQQQ` and put it in `symbol_map`.
+- The 0.15% FX fee applies to every conversion. Whether the API can trade from a USD balance
+  on a multi-currency Invest account is unverified; test it in demo before assuming
+  `fx_fee_pct: 0`. ISAs cannot hold USD.
+- Rate limits are enforced with a token bucket per endpoint and 429s back off automatically.
+
+### Interactive Brokers (optional)
+
+`broker: ibkr` uses [ib_async](https://github.com/ib-api-reloaded/ib_async) against a running
+TWS or IB Gateway (`IBKR_HOST`, `IBKR_PORT`, `IBKR_CLIENT_ID` in `.env`; 4002/7497 are the paper
+ports). The adapter can place native bracket orders (market entry with a child stop and
+take-profit held at IBKR). It has only been exercised against a fake gateway in tests; treat it
+as a starting point and paper trade it first.
+
+## Data providers
+
+| Provider | Needs | Bars | History | Notes |
+|---|---|---|---|---|
+| `yahoo` (default) | nothing | 1m, 5m, 15m | 1m: ~30 days (7-day chunks); 5m/15m: 60 days | Keyless, personal use, rate limited. LSE (`.L`) intraday coverage unverified. |
+| `alpaca` | free account keys | 1m, 5m | since 2016 | IEX feed; on the free plan the last 15 minutes are withheld, so paper trading on it lags. US only. |
+| `csv` | `data/<SYMBOL>_<tf>m.csv` | any | yours | Columns `timestamp,open,high,low,close,volume`. |
+| `synthetic` | nothing | any | any | Deterministic fake data for tests and demos only. |
+
+Bars are cached as parquet in `cache/`, so history keeps accumulating the longer the bot runs,
+beyond any provider's own window.
+
+## Tests, CI and secrets
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...     # or put it in .env
-# set news.enabled: true in config/config.yaml
-tradebot run --news
-tradebot usage                           # confirm what it cost
+ruff check . && ruff format --check .
+pytest -q
+python scripts/secret_scan.py --all
 ```
 
----
+Tests cover the cost model, sizing, every risk limit, the end-of-day flatten, the software stop
+logic, the paper broker, the Trading 212 adapter (with a fake HTTP session), the IBKR adapter
+(with a fake gateway), the backtester and benchmarks, the gate, the coach (with a fake model),
+the runner and the CLI. GitHub Actions runs lint, the secret scan, the tests and a synthetic
+backtest on every push; it never runs the bot.
 
-## n8n → GitHub
+Secrets live only in `.env`, which is git-ignored. `pip install pre-commit && pre-commit install`
+adds a hook that blocks commits containing anything that looks like a key, plus `ruff`.
 
-Two importable workflows in `n8n/workflows/`. Both push results back to this
-repository. See **[n8n/README.md](n8n/README.md)** for setup.
-
-- **`daily-run-and-push.json`** — self-hosted n8n with the repo checked out
-  locally. Pulls, runs the bot, collects `reports/` and `snapshots/`, and
-  commits each file through the GitHub Contents API (looking up the blob SHA
-  first so it creates *or* updates correctly).
-- **`dispatch-github-actions.json`** — n8n Cloud, where there is no local
-  checkout. Triggers `.github/workflows/daily-run.yml` via `workflow_dispatch`,
-  waits, then reads `reports/latest.json` back and flattens it to the handful
-  of numbers worth alerting on.
-
-`.github/workflows/daily-run.yml` also runs on its own schedule as a backstop
-if n8n is down.
-
----
-
-## Testing
-
-```bash
-pytest -q                    # 172 tests, fully offline
-ruff check src tests scripts
-python scripts/validate_n8n.py
-```
-
-The suite needs no network, no API key, and no market data. `OfflineProvider`
-replays chains from SQLite, which makes any past run reproducible — the
-snapshots are an audit trail *and* a data source.
-
-Coverage worth knowing about: Black-Scholes against published reference values
-and put-call parity; the marking rules including crossed books and zero bids;
-that shorts count toward concentration rather than netting against it; that the
-macro gate is deterministic and survives dead feeds; that an unchanged headline
-set costs nothing; and that £100 cannot buy a $1,300 contract.
-
-On the paper side: weighted-average entry, partial closes leaving the average
-untouched, short positions profiting as price falls, positions reversed through
-zero, realised P&L reconciling to the penny against cash, and the paper-only
-guard at all three levels.
-
----
-
-## Layout
+## Project layout
 
 ```
-src/tradebot/
-  types.py           Holding, ChainRow, MarkedPosition
-  config.py          every threshold from the layer specs, validated at load
-  store.py           SQLite: snapshots, IV history, runs, news cache, paper ledger
-  portfolio.py       portfolio.yaml loader
-  layer1/  blackscholes.py  provider.py  snapshots.py  valuation.py
-  layer2/  analytics.py
-  layer3/  macro.py  news.py
-  signals/ indicators.py  quant.py  risk.py  proposal.py
-  paper/   book.py  broker.py  performance.py
-  report/  render.py  dashboard.py
-  cli.py
-n8n/workflows/       importable workflow JSON
-.github/workflows/   CI and the daily run
+config.yaml                 the only file you edit
+.env.example                keys and tokens go in .env (git-ignored)
+simplebot/
+  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard
+  dashboard.py + .html      the local dashboard (reads the journal and reports; never trades)
+  config.py sessions.py     config loading/validation, exchange hours
+  data.py                   bar providers and the parquet cache
+  costs.py                  the cost model
+  strategies/               orb.py, intraday_momentum.py, vwap_revert.py, random_entry.py (benchmark)
+  risk.py                   sizing, daily loss stop, position limits, flatten window, stop checks
+  brokers/                  base.py (interface), paper.py, trading212.py, ibkr.py, ratelimit.py
+  engine.py                 the bar-by-bar engine shared by backtest, paper and live
+  backtest.py report.py     walk-forward backtester and benchmarks; Markdown/HTML reports
+  journal.py                SQLite decision log
+  runner.py notify.py       the long-running loop; Telegram
+  learn.py coach.py llm.py  the learning loop: re-fit + gate; the AI coach; Claude/Ollama clients
+tests/                      pytest suite
+scripts/secret_scan.py      pre-commit / CI secret scan
+deploy/                     systemd units, coach timer, Dockerfile, compose
+docs/RESEARCH.md            Step 0 research with sources
 ```
 
----
+## The hard rules
 
-*Informational software. Not financial advice. Options can expire worthless and
-short options can lose more than the premium received.*
+1. Paper first. Live needs `mode: live` and `SIMPLEBOT_LIVE_CONFIRM=yes`.
+2. No LLM calls in the trading loop unless you set `decider.provider`. Even then sizing, stops,
+   the daily loss stop and the flatten stay in code, and the coach still only proposes.
+3. Costs are always on. There is no gross-only number anywhere.
+4. Risk limits are enforced in code, not in the strategy.
+5. Secrets only from `.env`; a pre-commit scan blocks keys.
+6. A strategy may go live only after beating buy-and-hold out of sample after costs and
+   20+ paper days within the expected range. `python -m simplebot check` is the judge.

@@ -184,7 +184,9 @@ class YFinanceProvider:
 
     def history_closes(self, ticker: str, lookback_days: int) -> list[tuple[date, float]]:
         try:
-            hist = self._ticker(ticker).history(period=f"{max(lookback_days, 5)}d", auto_adjust=False)
+            hist = self._ticker(ticker).history(
+                period=f"{max(lookback_days, 5)}d", auto_adjust=False
+            )
         except Exception as exc:
             log.warning("history failed for %s: %s", ticker, exc)
             return []
@@ -192,14 +194,18 @@ class YFinanceProvider:
 
     def history_ohlcv(self, ticker: str, lookback_days: int) -> list[dict]:
         try:
-            hist = self._ticker(ticker).history(period=f"{max(lookback_days, 5)}d", auto_adjust=False)
+            hist = self._ticker(ticker).history(
+                period=f"{max(lookback_days, 5)}d", auto_adjust=False
+            )
         except Exception as exc:
             log.warning("ohlcv history failed for %s: %s", ticker, exc)
             return []
         out = []
         for idx, row in hist.iterrows():
-            bar = {k: _f(row.get(k.capitalize() if k != "volume" else "Volume"))
-                   for k in ("open", "high", "low", "close", "volume")}
+            bar = {
+                k: _f(row.get(k.capitalize() if k != "volume" else "Volume"))
+                for k in ("open", "high", "low", "close", "volume")
+            }
             if None in (bar["open"], bar["high"], bar["low"], bar["close"]):
                 continue
             bar["asof"] = idx.date().isoformat()

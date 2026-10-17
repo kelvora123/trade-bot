@@ -3,37 +3,52 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tradebot"
+name = "simplebot"
 version = "0.1.0"
-description = "Layered options portfolio analytics: valuation, portfolio analytics, macro gate, news."
+description = "Two paper-first tools in one repo: simplebot, a day-trading bot, and tradebot, layered options-portfolio analytics."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "pyyaml>=6.0",
-    "yfinance>=0.2.40",
-    "pandas>=2.0",
-    "numpy>=1.24",
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "pyarrow>=15",
+  "pyyaml>=6",
+  "python-dotenv>=1.0",
+  "requests>=2.31",
+  "yfinance>=0.2.40",
 ]
 
 [project.optional-dependencies]
-llm = ["anthropic>=0.40"]
-dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4"]
+claude = ["anthropic>=1.0"]
+ibkr = ["ib_async>=1.0"]
+dev = ["pytest>=8", "pytest-cov>=4.1", "ruff>=0.5"]
 
 [project.scripts]
+simplebot = "simplebot.main:main"
 tradebot = "tradebot.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = [".", "src"]
+include = ["simplebot*", "tradebot*"]
+
+[tool.setuptools.package-data]
+simplebot = ["*.html"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+# UP042: tradebot's enums are (str, Enum) on purpose; StrEnum changes str() and so report output.
+ignore = ["B008", "UP042"]
+
+[tool.ruff.lint.pycodestyle]
+# The formatter wraps at 100, but it cannot split a long SQL or HTML string literal.
+# Flag only the lines it had no way to shorten.
+max-line-length = 110
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
 addopts = "-q"
-
-[tool.ruff]
-line-length = 110
-target-version = "py310"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
-ignore = ["B008"]

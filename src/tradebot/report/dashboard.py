@@ -73,8 +73,10 @@ def _equity_charts(curve: list[list[Any]]) -> str:
     dual-axis mistake.
     """
     if len(curve) < 2:
-        return ('<p class="empty">Not enough equity history yet — the curve '
-                'appears once two runs have been recorded.</p>')
+        return (
+            '<p class="empty">Not enough equity history yet — the curve '
+            "appears once two runs have been recorded.</p>"
+        )
 
     dates = [str(p[0]) for p in curve]
     vals = [float(p[1]) for p in curve]
@@ -115,7 +117,9 @@ def _equity_charts(curve: list[list[Any]]) -> str:
     def yu(v: float) -> float:
         return 6.0 + (HU - 24.0) * (v / du_lo if du_lo else 0)
 
-    u_line = " ".join(f"{'M' if i == 0 else 'L'}{x(i):.1f},{yu(v):.1f}" for i, v in enumerate(under))
+    u_line = " ".join(
+        f"{'M' if i == 0 else 'L'}{x(i):.1f},{yu(v):.1f}" for i, v in enumerate(under)
+    )
     u_area = f"{u_line} L{x(n - 1):.1f},6 L{x(0):.1f},6 Z"
 
     eq_json = json.dumps({"d": dates, "v": vals, "u": [round(z, 2) for z in under]})
@@ -129,7 +133,7 @@ def _equity_charts(curve: list[list[Any]]) -> str:
 <div class="chart" data-chart="equity">
   <svg viewBox="0 0 {W:.0f} {H:.0f}" preserveAspectRatio="none" role="img"
        aria-label="Paper account equity over {n} tracked days">
-    {''.join(ticks)}
+    {"".join(ticks)}
     <path class="eq-area" d="{area}"/>
     <path class="eq-line" d="{line}"/>
     <line class="cross" x1="0" x2="0" y1="{PT}" y2="{H - PB}" style="opacity:0"/>
@@ -496,28 +500,55 @@ def render_fragment(payload: dict[str, Any]) -> str:
     # ---- KPI strip: the aggregate Greeks are the point of the page ------
     def kpi(label: str, glyph: str, value: str, note: str, cls: str = "") -> str:
         g = f'<span class="g">{glyph}</span>' if glyph else ""
-        return (f'<div class="kpi"><div class="k">{g}{label}</div>'
-                f'<div class="v {cls}">{value}</div><div class="n">{note}</div></div>')
+        return (
+            f'<div class="kpi"><div class="k">{g}{label}</div>'
+            f'<div class="v {cls}">{value}</div><div class="n">{note}</div></div>'
+        )
 
     theta = greeks.get("daily_theta_dollars")
-    kpis = "".join([
-        kpi("Net delta", "Δ", _num(greeks.get("net_delta_shares"), 1),
-            f'{_num(greeks.get("net_delta_dollars"), 0)} notional'),
-        kpi("Daily theta", "Θ", _signed(theta), "if nothing moves", _cls(theta)),
-        kpi("Net vega", "ν", _num(greeks.get("net_vega_dollars_per_iv_point")), "per 1 IV point"),
-        kpi("Net gamma", "Γ", _num(greeks.get("net_gamma_shares_per_point"), 2), "delta per 1pt spot"),
-        kpi("Max drawdown", "", _pct(eq.get("max_drawdown_pct")),
-            f'{_num(eq.get("max_drawdown_amount"), 0)} peak to trough', "down"),
-        kpi("Closed trades", "", _e(tr.get("closed", 0)),
-            f'{tr.get("wins", 0)}W / {tr.get("losses", 0)}L'
-            + (f' · PF {_num(tr.get("profit_factor"))}' if tr.get("profit_factor") else "")),
-    ])
+    kpis = "".join(
+        [
+            kpi(
+                "Net delta",
+                "Δ",
+                _num(greeks.get("net_delta_shares"), 1),
+                f"{_num(greeks.get('net_delta_dollars'), 0)} notional",
+            ),
+            kpi("Daily theta", "Θ", _signed(theta), "if nothing moves", _cls(theta)),
+            kpi(
+                "Net vega", "ν", _num(greeks.get("net_vega_dollars_per_iv_point")), "per 1 IV point"
+            ),
+            kpi(
+                "Net gamma",
+                "Γ",
+                _num(greeks.get("net_gamma_shares_per_point"), 2),
+                "delta per 1pt spot",
+            ),
+            kpi(
+                "Max drawdown",
+                "",
+                _pct(eq.get("max_drawdown_pct")),
+                f"{_num(eq.get('max_drawdown_amount'), 0)} peak to trough",
+                "down",
+            ),
+            kpi(
+                "Closed trades",
+                "",
+                _e(tr.get("closed", 0)),
+                f"{tr.get('wins', 0)}W / {tr.get('losses', 0)}L"
+                + (f" · PF {_num(tr.get('profit_factor'))}" if tr.get("profit_factor") else ""),
+            ),
+        ]
+    )
 
     # ---- equity ---------------------------------------------------------
     curve = payload.get("equity_curve") or []
     ret = eq.get("total_return_pct")
-    ann = (f' · annualised {_pct(eq.get("annualised_return_pct"), 2)}'
-           if eq.get("annualised_return_pct") is not None else " · annualised withheld")
+    ann = (
+        f" · annualised {_pct(eq.get('annualised_return_pct'), 2)}"
+        if eq.get("annualised_return_pct") is not None
+        else " · annualised withheld"
+    )
     equity_sec = f"""
 <section>
   <div class="shead"><h2>Paper equity</h2>
@@ -532,20 +563,23 @@ def render_fragment(payload: dict[str, Any]) -> str:
         g = p.get("greeks", {})
         iv = p.get("iv")
         tgt = p.get("progress_to_target_pct")
-        prog = (f'<span class="prog"><i style="width:{min(float(tgt), 100):.0f}%"></i></span>{_pct(tgt, 0)}'
-                if tgt is not None else "—")
-        warn = ('<span class="chip crit">stale</span>' if p.get("stale") else "")
+        prog = (
+            f'<span class="prog"><i style="width:{min(float(tgt), 100):.0f}%"></i></span>{_pct(tgt, 0)}'
+            if tgt is not None
+            else "—"
+        )
+        warn = '<span class="chip crit">stale</span>' if p.get("stale") else ""
         rows.append(
-            f'<tr><td>{_e(p["symbol"])} {warn}</td>'
-            f'<td>{_num(p.get("qty"), 0)}</td>'
-            f'<td>{_num(p.get("mark"))}</td>'
-            f'<td>{_num(p.get("cost_basis"))}</td>'
-            f'<td>{_num(p.get("current_value"), 0)}</td>'
+            f"<tr><td>{_e(p['symbol'])} {warn}</td>"
+            f"<td>{_num(p.get('qty'), 0)}</td>"
+            f"<td>{_num(p.get('mark'))}</td>"
+            f"<td>{_num(p.get('cost_basis'))}</td>"
+            f"<td>{_num(p.get('current_value'), 0)}</td>"
             f'<td class="{_cls(p.get("unrealised_pnl"))}">{_signed(p.get("unrealised_pnl"), 0)}</td>'
             f'<td class="{_cls(p.get("unrealised_pnl_pct"))}">{_signed(p.get("unrealised_pnl_pct"), 1)}%</td>'
-            f'<td>{_e(p.get("dte")) if p.get("dte") is not None else "—"}</td>'
-            f'<td>{_pct(iv * 100 if iv else None, 0)}</td>'
-            f'<td>{_signed(g.get("delta"), 1)}</td>'
+            f"<td>{_e(p.get('dte')) if p.get('dte') is not None else '—'}</td>"
+            f"<td>{_pct(iv * 100 if iv else None, 0)}</td>"
+            f"<td>{_signed(g.get('delta'), 1)}</td>"
             f'<td class="{_cls(g.get("theta"))}">{_signed(g.get("theta"), 1)}</td>'
             f'<td style="text-align:left">{prog}</td></tr>'
         )
@@ -565,9 +599,12 @@ def render_fragment(payload: dict[str, Any]) -> str:
     flags = alloc.get("concentration_flags") or []
     flag_html = "".join(
         f'<div class="flag"><span class="chip warn">{_e(f["kind"])}</span>'
-        f'<span>{_e(f["message"])}</span></div>' for f in flags
-    ) or ('<div class="flag"><span class="chip good">ok</span>'
-          '<span>No concentration cap exceeded.</span></div>')
+        f"<span>{_e(f['message'])}</span></div>"
+        for f in flags
+    ) or (
+        '<div class="flag"><span class="chip good">ok</span>'
+        "<span>No concentration cap exceeded.</span></div>"
+    )
 
     mid_sec = f"""
 <section>
@@ -588,8 +625,9 @@ def render_fragment(payload: dict[str, Any]) -> str:
 
     # ---- IV + expiry ----------------------------------------------------
     watch = a.get("expiry_watch") or []
-    watch_html = "".join(f'<li>{_e(w["fact"])}</li>' for w in watch) or (
-        '<li>Nothing inside the expiry window.</li>')
+    watch_html = "".join(f"<li>{_e(w['fact'])}</li>" for w in watch) or (
+        "<li>Nothing inside the expiry window.</li>"
+    )
     thresh = watch[0]["threshold_days"] if watch else 45
 
     lower_sec = f"""
@@ -638,12 +676,17 @@ def render_fragment(payload: dict[str, Any]) -> str:
 </section>"""
 
     # ---- caveats --------------------------------------------------------
-    layers = "valuation · analytics" + (" · macro" if macro else "") + (
-        " · news" if news.get("enabled") else "")
+    layers = (
+        "valuation · analytics"
+        + (" · macro" if macro else "")
+        + (" · news" if news.get("enabled") else "")
+    )
     caveats = perf.get("caveats") or []
-    news_note = ("News layer disabled — no API calls were made on this run."
-                 if not news.get("enabled") else
-                 f'News: {news.get("usage", {}).get("api_calls", 0)} API call(s).')
+    news_note = (
+        "News layer disabled — no API calls were made on this run."
+        if not news.get("enabled")
+        else f"News: {news.get('usage', {}).get('api_calls', 0)} API call(s)."
+    )
     cav_html = "".join(f"<p>{_e(c)}</p>" for c in caveats)
 
     growth_html = ""
@@ -675,9 +718,20 @@ def render_fragment(payload: dict[str, Any]) -> str:
   <span style="margin-left:auto">Paper trading · no live-broker adapter</span>
 </div>"""
 
-    return (CSS + '<div class="wrap">' + head + f'<div class="kpis">{kpis}</div>'
-            + equity_sec + positions_sec + mid_sec + lower_sec + macro_sec + footer
-            + "</div>" + SCRIPT)
+    return (
+        CSS
+        + '<div class="wrap">'
+        + head
+        + f'<div class="kpis">{kpis}</div>'
+        + equity_sec
+        + positions_sec
+        + mid_sec
+        + lower_sec
+        + macro_sec
+        + footer
+        + "</div>"
+        + SCRIPT
+    )
 
 
 def render_standalone(payload: dict[str, Any]) -> str:

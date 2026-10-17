@@ -15,8 +15,19 @@ import math
 from collections.abc import Sequence
 
 __all__ = [
-    "sma", "ema", "rsi", "true_range", "atr", "bollinger", "donchian",
-    "realised_vol", "roc", "slope", "zscore", "max_drawdown", "percentile",
+    "sma",
+    "ema",
+    "rsi",
+    "true_range",
+    "atr",
+    "bollinger",
+    "donchian",
+    "realised_vol",
+    "roc",
+    "slope",
+    "zscore",
+    "max_drawdown",
+    "percentile",
 ]
 
 Num = float | None
@@ -99,8 +110,9 @@ def true_range(highs: Sequence[float], lows: Sequence[float], closes: Sequence[f
     return out
 
 
-def atr(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float],
-        window: int = 14) -> list[Num]:
+def atr(
+    highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], window: int = 14
+) -> list[Num]:
     """Wilder-smoothed average true range -- the volatility unit stops are set in."""
     tr = true_range(highs, lows, closes)
     out: list[Num] = [None] * len(tr)
@@ -118,8 +130,9 @@ def atr(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float],
     return out
 
 
-def bollinger(closes: Sequence[float], window: int = 20, num_sd: float = 2.0
-              ) -> tuple[list[Num], list[Num], list[Num]]:
+def bollinger(
+    closes: Sequence[float], window: int = 20, num_sd: float = 2.0
+) -> tuple[list[Num], list[Num], list[Num]]:
     """(lower, middle, upper) bands. Middle is the SMA."""
     c = _clean(closes)
     mid = sma(c, window)
@@ -129,14 +142,15 @@ def bollinger(closes: Sequence[float], window: int = 20, num_sd: float = 2.0
         m = mid[i]
         if m is None:
             continue
-        var = sum((x - m) ** 2 for x in c[i - window + 1: i + 1]) / window
+        var = sum((x - m) ** 2 for x in c[i - window + 1 : i + 1]) / window
         sd = math.sqrt(var)
         lower[i], upper[i] = m - num_sd * sd, m + num_sd * sd
     return lower, mid, upper
 
 
-def donchian(highs: Sequence[float], lows: Sequence[float], window: int
-             ) -> tuple[list[Num], list[Num]]:
+def donchian(
+    highs: Sequence[float], lows: Sequence[float], window: int
+) -> tuple[list[Num], list[Num]]:
     """Channel over the *prior* ``window`` bars, excluding the current one.
 
     Excluding the current bar is what makes a breakout test honest: at bar i we
@@ -146,13 +160,14 @@ def donchian(highs: Sequence[float], lows: Sequence[float], window: int
     up: list[Num] = [None] * len(h)
     dn: list[Num] = [None] * len(h)
     for i in range(window, len(h)):
-        up[i] = max(h[i - window: i])
-        dn[i] = min(low_s[i - window: i])
+        up[i] = max(h[i - window : i])
+        dn[i] = min(low_s[i - window : i])
     return dn, up
 
 
-def realised_vol(closes: Sequence[float], window: int = 20,
-                 periods_per_year: int = 252) -> list[Num]:
+def realised_vol(
+    closes: Sequence[float], window: int = 20, periods_per_year: int = 252
+) -> list[Num]:
     """Annualised stdev of log returns, as a decimal (0.45 == 45%)."""
     c = _clean(closes)
     out: list[Num] = [None] * len(c)
@@ -160,7 +175,7 @@ def realised_vol(closes: Sequence[float], window: int = 20,
         return out
     rets = [math.log(c[i] / c[i - 1]) for i in range(1, len(c))]
     for i in range(window, len(c)):
-        w = rets[i - window: i]
+        w = rets[i - window : i]
         m = sum(w) / len(w)
         var = sum((r - m) ** 2 for r in w) / (len(w) - 1) if len(w) > 1 else 0.0
         out[i] = math.sqrt(var) * math.sqrt(periods_per_year)
@@ -189,7 +204,7 @@ def slope(values: Sequence[float], window: int) -> list[Num]:
     if denom <= 0:
         return out
     for i in range(window - 1, len(v)):
-        w = v[i - window + 1: i + 1]
+        w = v[i - window + 1 : i + 1]
         ybar = sum(w) / window
         num = sum((xs[k] - xbar) * (w[k] - ybar) for k in range(window))
         level = abs(v[i])
@@ -202,7 +217,7 @@ def zscore(values: Sequence[float], window: int) -> list[Num]:
     v = _clean(values)
     out: list[Num] = [None] * len(v)
     for i in range(window - 1, len(v)):
-        w = v[i - window + 1: i + 1]
+        w = v[i - window + 1 : i + 1]
         m = sum(w) / window
         var = sum((x - m) ** 2 for x in w) / (window - 1) if window > 1 else 0.0
         sd = math.sqrt(var)

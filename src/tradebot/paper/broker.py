@@ -226,7 +226,9 @@ class PaperBroker:
             slippage=slippage,
             reason=reason,
         )
-        log.info("paper %s %g %s @ %.4f (comm %.2f)", side, qty, holding.occ_symbol(), price, commission)
+        log.info(
+            "paper %s %g %s @ %.4f (comm %.2f)", side, qty, holding.occ_symbol(), price, commission
+        )
 
     # ------------------------------------------------------------- equity
 

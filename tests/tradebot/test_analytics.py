@@ -43,7 +43,12 @@ def test_iv_percentile_counts_days_below():
 
 def test_allocation_sums_to_one(cfg, store, nvda_call, aapl_shares):
     val = value_book(
-        [nvda_call, aapl_shares], {"NVDA": make_chain()}, {"NVDA": 185.0, "AAPL": 230.0}, cfg, ASOF, store
+        [nvda_call, aapl_shares],
+        {"NVDA": make_chain()},
+        {"NVDA": 185.0, "AAPL": 230.0},
+        cfg,
+        ASOF,
+        store,
     )
     r = analyse(val, store, cfg, {"NVDA": "Technology", "AAPL": "Technology"})
     assert sum(r.by_ticker.values()) == pytest.approx(1.0)
@@ -52,7 +57,12 @@ def test_allocation_sums_to_one(cfg, store, nvda_call, aapl_shares):
 
 def test_sector_map_groups_tickers(cfg, store, nvda_call, aapl_shares):
     val = value_book(
-        [nvda_call, aapl_shares], {"NVDA": make_chain()}, {"NVDA": 185.0, "AAPL": 230.0}, cfg, ASOF, store
+        [nvda_call, aapl_shares],
+        {"NVDA": make_chain()},
+        {"NVDA": 185.0, "AAPL": 230.0},
+        cfg,
+        ASOF,
+        store,
     )
     r = analyse(val, store, cfg, {"NVDA": "Technology", "AAPL": "Technology"})
     assert r.by_sector["Technology"] == pytest.approx(1.0)
@@ -104,7 +114,12 @@ def test_no_flags_when_within_caps(cfg, store):
 
 def test_aggregate_greeks_sum_across_positions(cfg, store, nvda_call, aapl_shares):
     val = value_book(
-        [nvda_call, aapl_shares], {"NVDA": make_chain()}, {"NVDA": 185.0, "AAPL": 230.0}, cfg, ASOF, store
+        [nvda_call, aapl_shares],
+        {"NVDA": make_chain()},
+        {"NVDA": 185.0, "AAPL": 230.0},
+        cfg,
+        ASOF,
+        store,
     )
     r = analyse(val, store, cfg, {})
     g = r.aggregate_greeks
@@ -117,7 +132,12 @@ def test_aggregate_greeks_sum_across_positions(cfg, store, nvda_call, aapl_share
 
 def test_stale_positions_excluded_from_greeks(cfg, store, nvda_call, aapl_shares):
     val = value_book(
-        [nvda_call, aapl_shares], {"NVDA": make_chain()}, {"NVDA": 185.0, "AAPL": None}, cfg, ASOF, store
+        [nvda_call, aapl_shares],
+        {"NVDA": make_chain()},
+        {"NVDA": 185.0, "AAPL": None},
+        cfg,
+        ASOF,
+        store,
     )
     r = analyse(val, store, cfg, {})
     assert r.aggregate_greeks["positions_excluded_stale"] == 1

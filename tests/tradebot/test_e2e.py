@@ -135,7 +135,9 @@ def project(tmp_path: Path) -> Path:
 
 
 def test_full_offline_run_succeeds(project, capsys):
-    code = main(["--root", str(project), "--offline", "--asof", ASOF.isoformat(), "run", "--no-news"])
+    code = main(
+        ["--root", str(project), "--offline", "--asof", ASOF.isoformat(), "run", "--no-news"]
+    )
     assert code == 0
     out = capsys.readouterr().out
     assert "# Portfolio run - 2026-01-05" in out
@@ -153,9 +155,26 @@ def test_full_offline_run_writes_both_reports(project):
 
 
 def test_run_json_payload_has_every_layer(project, capsys):
-    main(["--root", str(project), "--offline", "--asof", ASOF.isoformat(), "run", "--no-news", "--json"])
+    main(
+        [
+            "--root",
+            str(project),
+            "--offline",
+            "--asof",
+            ASOF.isoformat(),
+            "run",
+            "--no-news",
+            "--json",
+        ]
+    )
     payload = json.loads(capsys.readouterr().out)
-    for key in ("layer1_valuation", "layer2_analytics", "layer3_news", "paper_account", "growth_target"):
+    for key in (
+        "layer1_valuation",
+        "layer2_analytics",
+        "layer3_news",
+        "paper_account",
+        "growth_target",
+    ):
         assert key in payload
     assert payload["layer1_valuation"]["totals"]["current_value"] == pytest.approx(4900.0)
     assert payload["layer3_news"]["usage"]["api_calls"] == 0
@@ -178,9 +197,15 @@ def test_value_subcommand(project, capsys):
 def test_paper_affordability_check_rejects_on_small_account(project, capsys):
     code = main(
         [
-            "--root", str(project), "paper",
-            "--check-affordable", "NVDA260320C00180000",
-            "--qty", "1", "--mark", "13.0",
+            "--root",
+            str(project),
+            "paper",
+            "--check-affordable",
+            "NVDA260320C00180000",
+            "--qty",
+            "1",
+            "--mark",
+            "13.0",
         ]
     )
     assert code == 1  # GBP100 cannot buy a $1,300 contract
@@ -216,11 +241,24 @@ def test_run_prefers_the_paper_book_when_it_has_positions(project, capsys):
         cfg.paper.starting_cash = 10_000.0
         PaperBroker(cfg, s).buy(
             Holding("NVDA", AssetKind.OPTION, 1, 13.0, OptionKind.CALL, 180.0, EXPIRY),
-            1, mark=13.0, bid=12.9, ask=13.1,
+            1,
+            mark=13.0,
+            bid=12.9,
+            ask=13.1,
         )
 
-    main(["--root", str(project), "--offline", "--asof", ASOF.isoformat(),
-          "run", "--no-news", "--json"])
+    main(
+        [
+            "--root",
+            str(project),
+            "--offline",
+            "--asof",
+            ASOF.isoformat(),
+            "run",
+            "--no-news",
+            "--json",
+        ]
+    )
     payload = json.loads(capsys.readouterr().out)
     assert payload["paper_account"]["book_source"] == "paper"
     # The file declares two positions; the paper book holds one.
@@ -228,8 +266,18 @@ def test_run_prefers_the_paper_book_when_it_has_positions(project, capsys):
 
 
 def test_run_reports_performance_and_open_positions(project, capsys):
-    main(["--root", str(project), "--offline", "--asof", ASOF.isoformat(),
-          "run", "--no-news", "--json"])
+    main(
+        [
+            "--root",
+            str(project),
+            "--offline",
+            "--asof",
+            ASOF.isoformat(),
+            "run",
+            "--no-news",
+            "--json",
+        ]
+    )
     paper = json.loads(capsys.readouterr().out)["paper_account"]
     assert paper["mode"] == "paper"
     assert "performance" in paper and "caveats" in paper["performance"]

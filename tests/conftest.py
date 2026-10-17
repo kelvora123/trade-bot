@@ -1,83 +1,103 @@
 from __future__ import annotations
 
-import sys
-from datetime import date, timedelta
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
+import pandas as pd
 import pytest
+import yaml
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from simplebot import sessions
+from simplebot.config import from_dict
+from simplebot.data import get_bars
 
-from tradebot.config import Config  # noqa: E402
-from tradebot.store import Store  # noqa: E402
-from tradebot.types import AssetKind, ChainRow, Holding, OptionKind  # noqa: E402
-
-ASOF = date(2026, 1, 5)
-EXPIRY = date(2026, 3, 20)  # 74 days out
+NOW = datetime(2026, 10, 16, 21, 30, tzinfo=UTC)  # a Friday evening, after the US close
 
 
-@pytest.fixture
-def cfg(tmp_path: Path) -> Config:
-    c = Config()
-    c.root = tmp_path
-    return c
-
-
-@pytest.fixture
-def store(tmp_path: Path):
-    s = Store(tmp_path / "test.sqlite")
-    yield s
-    s.close()
-
-
-@pytest.fixture
-def nvda_call() -> Holding:
-    return Holding(
-        ticker="NVDA",
-        kind=AssetKind.OPTION,
-        qty=2,
-        cost_basis=12.50,
-        option_kind=OptionKind.CALL,
-        strike=180.0,
-        expiry=EXPIRY,
-        target=25.0,
-        stop=6.0,
-    )
+def base_raw(tmp_path) -> dict:
+    return {
+        "mode": "paper",
+        "broker": "paper",
+        "symbols": ["QQQ", "SPY"],
+        "timeframe": "5m",
+        "strategy": "orb",
+        "params": {"range_minutes": 5, "target_r": 10},
+        "starting_cash": 1000,
+        "data": {
+            "provider": "synthetic",
+            "cache_dir": str(tmp_path / "cache"),
+            "csv_dir": str(tmp_path / "data"),
+            "lookback_days": 40,
+        },
+        "learning": {"min_oos_trades": 5, "min_sharpe_gain": 0.1},
+        "reports_dir": str(tmp_path / "reports"),
+        "journal_path": str(tmp_path / "journal.sqlite"),
+        "telegram": False,
+    }
 
 
 @pytest.fixture
-def aapl_shares() -> Holding:
-    return Holding(ticker="AAPL", kind=AssetKind.SHARES, qty=10, cost_basis=225.40)
+def cfg(tmp_path):
+    raw = base_raw(tmp_path)
+    path = tmp_path / "config.yaml"
+    path.write_text("# test config\n" + yaml.safe_dump(raw, sort_keys=False))
+    return from_dict(raw, path=str(path))
 
 
-def make_chain(ticker: str = "NVDA", expiry: date = EXPIRY, spot: float = 185.0) -> list[ChainRow]:
-    """A small synthetic chain spanning strikes around spot."""
-    rows = []
-    for strike in (160.0, 170.0, 180.0, 190.0, 200.0):
-        moneyness = abs(strike - spot) / spot
-        iv = 0.40 + moneyness * 0.5  # a crude smile
-        for kind in (OptionKind.CALL, OptionKind.PUT):
-            intrinsic = max(spot - strike, 0) if kind is OptionKind.CALL else max(strike - spot, 0)
-            mid = intrinsic + 8.0
-            rows.append(
-                ChainRow(
-                    ticker=ticker,
-                    expiry=expiry,
-                    strike=strike,
-                    option_kind=kind,
-                    bid=round(mid - 0.25, 2),
-                    ask=round(mid + 0.25, 2),
-                    last=round(mid, 2),
-                    iv=round(iv, 4),
-                    volume=100,
-                    open_interest=500,
-                )
-            )
-    return rows
+@pytest.fixture
+def bars(cfg):
+    return {
+        s: get_bars(cfg, s, provider="synthetic", lookback_days=40, now=NOW) for s in cfg.symbols
+    }
 
 
-def seed_iv_history(store: Store, ticker: str, asof: date, days: int, base: float = 0.40) -> None:
-    """Write ``days`` of ATM-IV history ending the day before ``asof``."""
-    for i in range(days):
-        d = asof - timedelta(days=days - i)
-        store.record_underlying_iv(d, ticker, base + (i % 10) * 0.01, 185.0)
+def bars_from_closes(
+    closes, day="2026-10-05", symbol="QQQ", tf=5, wick=0.0, start_minute=0, first_open=None
+):
+    """Hand-built session bars: each bar opens at the previous close."""
+    market = sessions.market_for(symbol)
+    t0 = sessions.session_open(market, pd.Timestamp(day).date()) + timedelta(minutes=start_minute)
+    rows, prev = [], (closes[0] if first_open is None else first_open)
+    for c in closes:
+        o = prev
+        rows.append(
+            {
+                "open": o,
+                "high": max(o, c) + wick,
+                "low": min(o, c) - wick,
+                "close": c,
+                "volume": 1000.0,
+            }
+        )
+        prev = c
+    idx = pd.DatetimeIndex([t0 + timedelta(minutes=i * tf) for i in range(len(closes))], name="ts")
+    df = pd.DataFrame(rows, index=idx)
+    df.attrs.update({"symbol": symbol, "market": market.name, "timeframe": tf})
+    return df
+
+
+class StubStrategy:
+    """Fires once per session at bar number `fire_at` (1-based) with a % stop/target."""
+
+    NAME = "stub"
+    DEFAULT_PARAMS: dict = {}
+
+    def __init__(self, fire_at=2, side="long", stop_pct=1.0, target_pct=None):
+        self.fire_at, self.side, self.stop_pct, self.target_pct = (
+            fire_at,
+            side,
+            stop_pct,
+            target_pct,
+        )
+
+    def signal(self, bars, params):
+        from simplebot.strategies import Signal
+        from simplebot.strategies.common import today_bars
+
+        today = today_bars(bars)
+        if len(today) != self.fire_at:
+            return None
+        entry = float(today["close"].iloc[-1])
+        sgn = 1 if self.side == "long" else -1
+        stop = entry * (1 - sgn * self.stop_pct / 100)
+        target = entry * (1 + sgn * self.target_pct / 100) if self.target_pct else None
+        return Signal(self.side, entry, stop, target, reason="stub")

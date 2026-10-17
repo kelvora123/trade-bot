@@ -284,7 +284,11 @@ def _expiry_watch(positions: list[MarkedPosition], cfg: Config) -> list[dict[str
                 "fact": (
                     f"{p.holding.occ_symbol()} has {p.dte} days to expiry and is decaying at "
                     f"{abs(p.theta):.2f}/day"
-                    + (f" ({theta_pct:.2f}% of position value per day)." if theta_pct is not None else ".")
+                    + (
+                        f" ({theta_pct:.2f}% of position value per day)."
+                        if theta_pct is not None
+                        else "."
+                    )
                 ),
             }
         )

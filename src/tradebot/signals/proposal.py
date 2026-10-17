@@ -78,8 +78,10 @@ class Proposal:
             return None
         verb = "buy" if self.direction == "long" else "sell"
         parts = [
-            f"tradebot {verb} {self.ticker}", f"--qty {self.qty}",
-            f"--price {self.entry:.4f}", "--shares",
+            f"tradebot {verb} {self.ticker}",
+            f"--qty {self.qty}",
+            f"--price {self.entry:.4f}",
+            "--shares",
         ]
         if self.stop is not None:
             parts.append(f"--stop {self.stop:.4f}")
@@ -115,7 +117,9 @@ def build_proposal(
     stop_dist = quant.atr * cfg.atr_stop_multiple
     long = quant.direction == "long"
     stop = entry - stop_dist if long else entry + stop_dist
-    target = entry + stop_dist * cfg.reward_multiple if long else entry - stop_dist * cfg.reward_multiple
+    target = (
+        entry + stop_dist * cfg.reward_multiple if long else entry - stop_dist * cfg.reward_multiple
+    )
 
     p.entry, p.stop, p.target = entry, stop, target
     p.risk_per_unit = stop_dist
@@ -132,7 +136,9 @@ def build_proposal(
     if quant.rsi is not None:
         p.rationale.append(f"RSI(14) at {quant.rsi:.1f}")
     if quant.volatility_annualised is not None:
-        p.rationale.append(f"Realised volatility {quant.volatility_annualised * 100:.0f}% annualised")
+        p.rationale.append(
+            f"Realised volatility {quant.volatility_annualised * 100:.0f}% annualised"
+        )
     if risk.sizing and risk.sizing.qty:
         p.rationale.append(
             f"Size {risk.sizing.qty} risks {risk.sizing.risk_amount:,.2f} "

@@ -267,7 +267,9 @@ class Store:
                 (asof.isoformat(), symbol, ticker, float(iv)),
             )
 
-    def record_underlying_iv(self, asof: date, ticker: str, atm_iv: float, spot: float | None) -> None:
+    def record_underlying_iv(
+        self, asof: date, ticker: str, atm_iv: float, spot: float | None
+    ) -> None:
         with self.tx() as c:
             c.execute(
                 "INSERT OR REPLACE INTO underlying_iv_history (asof,ticker,atm_iv,spot) VALUES (?,?,?,?)",
@@ -283,8 +285,16 @@ class Store:
         )
         return [float(r["atm_iv"]) for r in cur]
 
-    def record_ohlcv(self, asof: date, ticker: str, o: float, h: float, low: float,
-                     c: float, volume: float | None = None) -> None:
+    def record_ohlcv(
+        self,
+        asof: date,
+        ticker: str,
+        o: float,
+        h: float,
+        low: float,
+        c: float,
+        volume: float | None = None,
+    ) -> None:
         if h < low:
             raise ValueError(f"{ticker} {asof}: high {h} below low {low}")
         with self.tx() as conn:
@@ -340,7 +350,9 @@ class Store:
         row = cur.fetchone()
         return json.loads(row["payload"]) if row else None
 
-    def put_news_cache(self, cache_key: str, asof: date, payload: dict[str, Any], created_at: str) -> None:
+    def put_news_cache(
+        self, cache_key: str, asof: date, payload: dict[str, Any], created_at: str
+    ) -> None:
         with self.tx() as c:
             c.execute(
                 "INSERT OR REPLACE INTO news_cache (cache_key,asof,created_at,payload) VALUES (?,?,?,?)",
@@ -348,17 +360,32 @@ class Store:
             )
 
     def record_llm_usage(
-        self, asof: date, created_at: str, model: str, input_tokens: int, output_tokens: int, purpose: str
+        self,
+        asof: date,
+        created_at: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        purpose: str,
     ) -> None:
         with self.tx() as c:
             c.execute(
                 "INSERT INTO llm_usage (asof,created_at,model,input_tokens,output_tokens,purpose) "
                 "VALUES (?,?,?,?,?,?)",
-                (asof.isoformat(), created_at, model, int(input_tokens), int(output_tokens), purpose),
+                (
+                    asof.isoformat(),
+                    created_at,
+                    model,
+                    int(input_tokens),
+                    int(output_tokens),
+                    purpose,
+                ),
             )
 
     def llm_calls_today(self, asof: date) -> int:
-        cur = self.conn.execute("SELECT COUNT(*) AS n FROM llm_usage WHERE asof=?", (asof.isoformat(),))
+        cur = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM llm_usage WHERE asof=?", (asof.isoformat(),)
+        )
         return int(cur.fetchone()["n"])
 
     def llm_tokens_total(self) -> tuple[int, int]:
@@ -371,7 +398,17 @@ class Store:
     # ---------------------------------------------------------------- paper
 
     def record_fill(self, **kw: Any) -> None:
-        cols = ("ts", "symbol", "ticker", "side", "qty", "price", "commission", "slippage", "reason")
+        cols = (
+            "ts",
+            "symbol",
+            "ticker",
+            "side",
+            "qty",
+            "price",
+            "commission",
+            "slippage",
+            "reason",
+        )
         with self.tx() as c:
             c.execute(
                 f"INSERT INTO paper_fills ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
@@ -412,8 +449,19 @@ class Store:
 
     def upsert_position(self, **kw: Any) -> None:
         cols = (
-            "symbol", "ticker", "kind", "option_kind", "strike", "expiry", "qty",
-            "avg_price", "multiplier", "target", "stop", "opened_at", "realised_pnl",
+            "symbol",
+            "ticker",
+            "kind",
+            "option_kind",
+            "strike",
+            "expiry",
+            "qty",
+            "avg_price",
+            "multiplier",
+            "target",
+            "stop",
+            "opened_at",
+            "realised_pnl",
             "entry_costs",
         )
         with self.tx() as c:
@@ -429,13 +477,21 @@ class Store:
 
     def record_trade(self, **kw: Any) -> None:
         cols = (
-            "symbol", "ticker", "opened_at", "closed_at", "qty", "entry_price",
-            "exit_price", "multiplier", "pnl", "costs", "reason",
+            "symbol",
+            "ticker",
+            "opened_at",
+            "closed_at",
+            "qty",
+            "entry_price",
+            "exit_price",
+            "multiplier",
+            "pnl",
+            "costs",
+            "reason",
         )
         with self.tx() as c:
             c.execute(
-                f"INSERT INTO paper_trades ({','.join(cols)}) "
-                f"VALUES ({','.join('?' * len(cols))})",
+                f"INSERT INTO paper_trades ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                 tuple(kw.get(k) for k in cols),
             )
 

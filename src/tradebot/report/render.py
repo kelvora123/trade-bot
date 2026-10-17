@@ -112,7 +112,11 @@ def render_markdown(
 
     flags = alloc.get("concentration_flags") or []
     if flags:
-        out += ["### Concentration flags (informational)", ""] + [f"- {f['message']}" for f in flags] + [""]
+        out += (
+            ["### Concentration flags (informational)", ""]
+            + [f"- {f['message']}" for f in flags]
+            + [""]
+        )
 
     g = analytics.get("aggregate_greeks", {})
     if g:
@@ -145,17 +149,24 @@ def render_markdown(
             )
         building = [e for e in iv_env if e.get("status") == "building history"]
         if building:
-            out += ["", f"_{len(building)} contract(s) still building history -- {building[0]['note']}_"]
+            out += [
+                "",
+                f"_{len(building)} contract(s) still building history -- {building[0]['note']}_",
+            ]
         out.append("")
 
     watch = analytics.get("expiry_watch") or []
     if watch:
-        out += [
-            f"### Expiry watch (<= {watch[0]['threshold_days']} DTE)",
-            "",
-            "_Facts only; this report does not advise rolling._",
-            "",
-        ] + [f"- {e['fact']}" for e in watch] + [""]
+        out += (
+            [
+                f"### Expiry watch (<= {watch[0]['threshold_days']} DTE)",
+                "",
+                "_Facts only; this report does not advise rolling._",
+                "",
+            ]
+            + [f"- {e['fact']}" for e in watch]
+            + [""]
+        )
 
     for note in analytics.get("notes") or []:
         out.append(f"> {note}")
@@ -260,8 +271,8 @@ def render_markdown(
                 f"- Closed trades: **{tr['closed']}** "
                 f"({tr.get('wins', 0)}W / {tr.get('losses', 0)}L, "
                 f"win rate {_pct(tr.get('win_rate_pct'))})",
-                f"- Profit factor: "
-                f"{tr['profit_factor']:.2f}" if tr.get("profit_factor") is not None
+                f"- Profit factor: {tr['profit_factor']:.2f}"
+                if tr.get("profit_factor") is not None
                 else "- Profit factor: n/a",
                 f"- Avg win / avg loss: {_money(tr.get('avg_win'))} / {_money(tr.get('avg_loss'))}",
                 "",

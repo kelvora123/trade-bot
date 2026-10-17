@@ -28,13 +28,13 @@ __all__ = ["RiskConfig", "PositionSize", "RiskRead", "size_position", "assess"]
 
 @dataclass
 class RiskConfig:
-    risk_per_trade_pct: float = 0.01      # 1% of equity at risk if stopped
-    max_position_pct: float = 0.25        # notional cap per position
+    risk_per_trade_pct: float = 0.01  # 1% of equity at risk if stopped
+    max_position_pct: float = 0.25  # notional cap per position
     max_portfolio_heat_pct: float = 0.06  # summed open risk cap
-    atr_stop_multiple: float = 2.0        # stop distance in ATR units
-    reward_multiple: float = 2.0          # target distance as a multiple of risk
+    atr_stop_multiple: float = 2.0  # stop distance in ATR units
+    reward_multiple: float = 2.0  # target distance as a multiple of risk
     var_confidence: float = 0.95
-    max_annual_vol: float = 1.50          # refuse to size above this vol
+    max_annual_vol: float = 1.50  # refuse to size above this vol
 
 
 @dataclass
@@ -171,7 +171,9 @@ class RiskRead:
         }
 
 
-def _historical_var(returns: Sequence[float], confidence: float) -> tuple[float | None, float | None]:
+def _historical_var(
+    returns: Sequence[float], confidence: float
+) -> tuple[float | None, float | None]:
     """Historical-simulation VaR and Expected Shortfall, as positive percentages.
 
     Historical rather than parametric on purpose: asset returns are fat-tailed,
@@ -228,9 +230,13 @@ def assess(
         total_w = sum(w for _, w in parts)
         read.risk_score = sum(v * w for v, w in parts) / total_w
         read.band = (
-            "low" if read.risk_score < 0.25 else
-            "moderate" if read.risk_score < 0.5 else
-            "elevated" if read.risk_score < 0.75 else "high"
+            "low"
+            if read.risk_score < 0.25
+            else "moderate"
+            if read.risk_score < 0.5
+            else "elevated"
+            if read.risk_score < 0.75
+            else "high"
         )
 
     if annual_vol is not None and annual_vol > cfg.max_annual_vol:

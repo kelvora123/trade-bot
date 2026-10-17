@@ -1,0 +1,58 @@
+# Publishes the dashboard to GitHub Pages so it can be opened in any browser:
+#   https://<owner>.github.io/<repo>/
+# By default it serves a DEMO snapshot built from synthetic data. To publish your real
+# dashboard, run `python -m simplebot dashboard --static dashboard/index.html` where the bot
+# runs and push that file to main: the workflow prefers dashboard/index.html when it exists.
+# A Pages snapshot is static (no auto-refresh); the live page is `python -m simplebot dashboard`.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+      - name: Build the page
+        run: |
+          mkdir -p site
+          if [ -f dashboard/index.html ]; then
+            cp dashboard/index.html site/index.html
+            echo "publishing the committed dashboard snapshot (dashboard/index.html)"
+          else
+            python -m simplebot dashboard --demo --demo-dir /tmp/demo --static site/index.html
+            echo "publishing a demo snapshot (synthetic data)"
+          fi
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

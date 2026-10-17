@@ -91,7 +91,10 @@ def _schema(tickers: list[str]) -> dict[str, Any]:
                             "type": "string",
                             "description": "Two sentences at most on what actually happened.",
                         },
-                        "sentiment": {"type": "string", "enum": ["positive", "neutral", "negative"]},
+                        "sentiment": {
+                            "type": "string",
+                            "enum": ["positive", "neutral", "negative"],
+                        },
                         "key_drivers": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -158,7 +161,9 @@ class NewsResult:
         }
 
 
-def _collect(provider: Any, tickers: list[str], cfg: Config) -> tuple[dict[str, list[dict]], list[str]]:
+def _collect(
+    provider: Any, tickers: list[str], cfg: Config
+) -> tuple[dict[str, list[dict]], list[str]]:
     grouped: dict[str, list[dict]] = {}
     notes: list[str] = []
     for ticker in tickers:
@@ -191,7 +196,9 @@ def _render_prompt(grouped: dict[str, list[dict]], cfg: Config) -> str:
     return "\n".join(lines)
 
 
-def analyse_news(provider: Any, tickers: list[str], cfg: Config, store: Store, asof: date) -> NewsResult:
+def analyse_news(
+    provider: Any, tickers: list[str], cfg: Config, store: Store, asof: date
+) -> NewsResult:
     """Summarise recent headlines for every held name in one batched call."""
     result = NewsResult(asof=asof, enabled=cfg.news.enabled, model=cfg.news.model)
 
@@ -247,7 +254,9 @@ def analyse_news(provider: Any, tickers: list[str], cfg: Config, store: Store, a
         counted = client.messages.count_tokens(
             model=cfg.news.model, system=SYSTEM_PROMPT, messages=request["messages"]
         )
-        log.info("news layer: %d input tokens for %d tickers", counted.input_tokens, len(tickers_present))
+        log.info(
+            "news layer: %d input tokens for %d tickers", counted.input_tokens, len(tickers_present)
+        )
     except Exception as exc:  # token counting is advisory; never block on it
         log.debug("count_tokens failed: %s", exc)
 
@@ -274,7 +283,9 @@ def analyse_news(provider: Any, tickers: list[str], cfg: Config, store: Store, a
         return result
 
     if response.stop_reason == "refusal":
-        result.notes.append("News layer: request was declined by the model's safety system. Skipped.")
+        result.notes.append(
+            "News layer: request was declined by the model's safety system. Skipped."
+        )
         return result
 
     try:
@@ -282,7 +293,9 @@ def analyse_news(provider: Any, tickers: list[str], cfg: Config, store: Store, a
         parsed = json.loads(text)
         result.per_ticker = parsed.get("per_ticker", [])
     except (StopIteration, json.JSONDecodeError, AttributeError) as exc:
-        result.notes.append(f"News layer: could not parse response ({exc.__class__.__name__}). Skipped.")
+        result.notes.append(
+            f"News layer: could not parse response ({exc.__class__.__name__}). Skipped."
+        )
         return result
 
     result.api_calls = 1

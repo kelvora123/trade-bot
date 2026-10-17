@@ -50,14 +50,18 @@ BOOK = [
 def smile(spot: float, strike: float, base_vol: float, dte: int) -> float:
     """A plausible vol smile: OTM puts bid up, short dated steeper."""
     m = math.log(strike / spot)
-    skew = -0.55 * m                       # puts richer than calls
-    curve = 1.9 * m * m                    # both wings lift
+    skew = -0.55 * m  # puts richer than calls
+    curve = 1.9 * m * m  # both wings lift
     term = 0.14 * (30.0 / max(dte, 7)) ** 0.5
     return max(0.08, base_vol + skew + curve + term - 0.14)
 
 
 def build_chain(
-    ticker: str, spot: float, base_vol: float, expiry: date, asof: date,
+    ticker: str,
+    spot: float,
+    base_vol: float,
+    expiry: date,
+    asof: date,
     must_include: set[float] | None = None,
 ) -> list[ChainRow]:
     dte = max((expiry - asof).days, 1)
@@ -67,7 +71,7 @@ def build_chain(
     strikes = {round((round(spot / step) + i) * step, 2) for i in range(-6, 7)}
     # A real chain always contains the strike you hold; without this the held
     # contract cannot be marked and the position shows as stale.
-    strikes |= (must_include or set())
+    strikes |= must_include or set()
     for strike in sorted(strikes):
         if strike <= 0:
             continue
@@ -81,10 +85,16 @@ def build_chain(
             spread = max(0.02, mid * 0.025)
             rows.append(
                 ChainRow(
-                    ticker=ticker, expiry=expiry, strike=strike, option_kind=kind,
-                    bid=round(mid - spread / 2, 2), ask=round(mid + spread / 2, 2),
-                    last=round(mid, 2), iv=round(iv, 4),
-                    volume=RNG.randint(20, 4000), open_interest=RNG.randint(100, 30000),
+                    ticker=ticker,
+                    expiry=expiry,
+                    strike=strike,
+                    option_kind=kind,
+                    bid=round(mid - spread / 2, 2),
+                    ask=round(mid + spread / 2, 2),
+                    last=round(mid, 2),
+                    iv=round(iv, 4),
+                    volume=RNG.randint(20, 4000),
+                    open_interest=RNG.randint(100, 30000),
                 )
             )
     return rows
@@ -137,12 +147,25 @@ def main() -> int:
                 hi = px * (1 + abs(RNG.gauss(0, intraday)))
                 lo = px * (1 - abs(RNG.gauss(0, intraday)))
                 op = lo + (hi - lo) * RNG.random()
-                store.record_ohlcv(d, ticker, round(op, 2), round(max(hi, px), 2),
-                                   round(min(lo, px), 2), round(px, 2),
-                                   RNG.randint(2_000_000, 40_000_000))
+                store.record_ohlcv(
+                    d,
+                    ticker,
+                    round(op, 2),
+                    round(max(hi, px), 2),
+                    round(min(lo, px), 2),
+                    round(px, 2),
+                    RNG.randint(2_000_000, 40_000_000),
+                )
             store.record_spot(ASOF, ticker, spot)
-            store.record_ohlcv(ASOF, ticker, spot * 0.997, spot * 1.008, spot * 0.992,
-                               spot, RNG.randint(2_000_000, 40_000_000))
+            store.record_ohlcv(
+                ASOF,
+                ticker,
+                spot * 0.997,
+                spot * 1.008,
+                spot * 0.992,
+                spot,
+                RNG.randint(2_000_000, 40_000_000),
+            )
 
         # --- today's chains -------------------------------------------------
         expiries = sorted({e for _, _, _, _, e, *_ in BOOK if e})
@@ -152,23 +175,39 @@ def main() -> int:
             for exp in expiries:
                 rows += build_chain(ticker, spot, base_vol, exp, ASOF, must_include=held)
             # Yesterday's snapshot too, so the chain diff has a baseline.
-            write_snapshot(cfg.path("snapshots_dir"), store, ticker,
-                           ASOF - timedelta(days=1), rows[:-2], spot * 0.995)
+            write_snapshot(
+                cfg.path("snapshots_dir"),
+                store,
+                ticker,
+                ASOF - timedelta(days=1),
+                rows[:-2],
+                spot * 0.995,
+            )
             write_snapshot(cfg.path("snapshots_dir"), store, ticker, ASOF, rows, spot)
             store.record_underlying_iv(ASOF, ticker, base_vol, spot)
 
         # --- the paper book --------------------------------------------------
         for ticker, kind, ok, strike, expiry, qty, basis, target, stop in BOOK:
             store.upsert_position(
-                symbol=(f"{ticker}{expiry:%y%m%d}{'C' if ok is OptionKind.CALL else 'P'}"
-                        f"{int(round(strike * 1000)):08d}" if kind == "option" else ticker),
-                ticker=ticker, kind=kind,
-                option_kind=ok.value if ok else None, strike=strike,
+                symbol=(
+                    f"{ticker}{expiry:%y%m%d}{'C' if ok is OptionKind.CALL else 'P'}"
+                    f"{int(round(strike * 1000)):08d}"
+                    if kind == "option"
+                    else ticker
+                ),
+                ticker=ticker,
+                kind=kind,
+                option_kind=ok.value if ok else None,
+                strike=strike,
                 expiry=expiry.isoformat() if expiry else None,
-                qty=qty, avg_price=basis, multiplier=100 if kind == "option" else 1,
-                target=target, stop=stop,
+                qty=qty,
+                avg_price=basis,
+                multiplier=100 if kind == "option" else 1,
+                target=target,
+                stop=stop,
                 opened_at=(ASOF - timedelta(days=RNG.randint(20, 80))).isoformat(),
-                realised_pnl=0.0, entry_costs=abs(qty) * 0.65 if kind == "option" else 0.0,
+                realised_pnl=0.0,
+                entry_costs=abs(qty) * 0.65 if kind == "option" else 0.0,
             )
 
         # --- closed trades: a realistic mix, not a winning streak ------------
@@ -189,10 +228,17 @@ def main() -> int:
         for i, (sym, tk, qty, entry, exit_, pnl, reason) in enumerate(closed):
             opened = ASOF - timedelta(days=200 - i * 14)
             store.record_trade(
-                symbol=sym, ticker=tk, opened_at=opened.isoformat(),
+                symbol=sym,
+                ticker=tk,
+                opened_at=opened.isoformat(),
                 closed_at=(opened + timedelta(days=RNG.randint(9, 45))).isoformat(),
-                qty=qty, entry_price=entry, exit_price=exit_, multiplier=100,
-                pnl=pnl, costs=qty * 1.30, reason=reason,
+                qty=qty,
+                entry_price=entry,
+                exit_price=exit_,
+                multiplier=100,
+                pnl=pnl,
+                costs=qty * 1.30,
+                reason=reason,
             )
 
         # --- equity curve ----------------------------------------------------
@@ -203,7 +249,7 @@ def main() -> int:
         book_value = _book_value(cfg, store)
         path = [25_000.0]
         for i in range(args.days):
-            drift = 0.0018 if not (58 < i < 78) else -0.0075   # one drawdown stretch
+            drift = 0.0018 if not (58 < i < 78) else -0.0075  # one drawdown stretch
             path.append(path[-1] * (1 + drift + RNG.gauss(0, 0.008)))
 
         # Scale the walk so it ends at a chosen equity, then derive the cash
