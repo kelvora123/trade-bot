@@ -33,6 +33,9 @@ that must pass a backtest gate before anything is applied.
   the trading loop, as a last resort when the rules have nothing, as a final say on every rule
   signal, or as the primary decider. Sizing, stops, the daily loss stop and the end-of-day
   flatten stay in code whatever it says. See "Claude in the loop".
+- An AI risk agent over MCP: Claude Desktop or Claude Code can check the bot and your
+  Trading 212 account, reconcile positions and stop the bot, but never trade or resume it.
+  See "AI risk agent over MCP".
 - `live`: only unlocks when `mode: live` is set **and** `SIMPLEBOT_LIVE_CONFIRM=yes` is in
   `.env` **and** the strategy has passed Rule 6 (beats buy-and-hold out of sample after costs
   and has 20+ paper days within the expected range).
@@ -217,6 +220,67 @@ and `live` refuse to run; only `python -m simplebot resume` (you) removes it.
   now; `python -m simplebot guardian` runs the real review; `python -m simplebot check` reports a
   stop in force; the dashboard shows a red banner with the reason.
 
+## AI risk agent over MCP (Claude Desktop, Claude Code)
+
+`python -m simplebot mcp` turns the bot into a toolbox for an AI agent, using the Model Context
+Protocol (MCP). Connect it to Claude Desktop or Claude Code and you can ask "how is the bot
+doing?" or "run a risk review" and the agent checks the bot and your Trading 212 account itself.
+It runs on demand, alongside the guardian, which keeps watching on every bar.
+
+| Tool | What the agent gets |
+| --- | --- |
+| `bot_status` | running or not, halted, guardian stop, equity, today's P&L, open trades with stops, drawdown from peak, the limits |
+| `account_snapshot` | cash, equity, positions and pending orders read from Trading 212, plus any mismatch with the bot's open trades |
+| `recent_trades`, `daily_results` | the journal: trades, win rate, daily P&L, halts |
+| `alerts` | halts, errors, rejected orders, capped stops, guardian actions |
+| `risk_check` | the guardian's stop rules evaluated now, a crashed-with-positions check and the Trading 212 reconciliation. Reports only |
+| `stop_bot` | stops the bot completely, exactly like a guardian stop: flatten, write `simplebot.STOPPED`, Telegram alert |
+
+There is also a `risk_review` prompt that walks the agent through all of it and asks for an
+OK, WATCH or STOP verdict.
+
+**What it cannot do.** The agent cannot place or cancel orders, resume a stopped bot, or change
+any setting; those tools do not exist, and a test checks the code never calls them. The
+Trading 212 calls are reads only. Only `python -m simplebot resume`, run by you, undoes a stop.
+Start the server with `--read-only` to remove `stop_bot` too.
+
+**Connect Claude Desktop.** Settings, Developer, Edit Config, then add (use your own paths; on
+Windows, write the Python path with doubled backslashes, like `C:\\Users\\you\\trade-bot\\.venv\\Scripts\\python.exe`):
+
+```json
+{
+  "mcpServers": {
+    "simplebot": {
+      "command": "/home/you/trade-bot/.venv/bin/python",
+      "args": ["-m", "simplebot", "--config", "/home/you/trade-bot/config.yaml", "mcp"]
+    }
+  }
+}
+```
+
+**Connect Claude Code.**
+
+```bash
+claude mcp add simplebot -- /home/you/trade-bot/.venv/bin/python -m simplebot \
+  --config /home/you/trade-bot/config.yaml mcp
+```
+
+**Bot on a VPS, Claude on your laptop.** The server must run where the journal is. Let SSH carry
+the protocol: set `"command": "ssh"` and
+`"args": ["you@your-vps", "cd trade-bot && .venv/bin/python -m simplebot mcp"]`.
+
+Notes:
+
+- `account_snapshot` and the reconciliation need `broker: trading212`; in paper mode they read
+  the Practice account, in live mode the live one (with the matching key in `.env`).
+- Shares you bought by hand in the same account show up as mismatches. Give the bot its own
+  account (for example the Practice account, or Invest while you hold long-term in the ISA).
+- The account read is cached for 15 seconds so the agent cannot eat into Trading 212's rate
+  limits, which the running bot shares.
+- The video version of this idea connects a TradingView MCP server for charts and alerts. If you
+  use one, add it next to `simplebot` in the same config; prices for the bot still come from the
+  data provider and orders still go to Trading 212.
+
 ## Costs (always on)
 
 `costs.spread_bps` (half paid on each side), `costs.slippage_bps` (each side),
@@ -385,8 +449,9 @@ adds a hook that blocks commits containing anything that looks like a key, plus 
 config.yaml                 the only file you edit
 .env.example                keys and tokens go in .env (git-ignored)
 simplebot/
-  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard | guardian | resume
+  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard | guardian | resume | mcp
   guardian.py               the watchdog: deterministic rules + optional AI reviewer that can stop the bot completely
+  risk_agent.py             MCP server: tools for an AI risk agent (read-only plus stop_bot)
   dashboard.py + .html      the local dashboard (reads the journal and reports; never trades)
   config.py sessions.py     config loading/validation, exchange hours
   data.py                   bar providers and the parquet cache

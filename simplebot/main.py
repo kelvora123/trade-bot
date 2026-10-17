@@ -428,6 +428,33 @@ def cmd_resume(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp(cfg: Config, args: argparse.Namespace) -> int:
+    """Serve the AI risk agent's tools over MCP (stdio) for Claude Desktop, Claude Code, etc."""
+    from simplebot.notify import make_notifier
+    from simplebot.risk_agent import RiskAgentServer
+
+    # MCP clients start servers from any folder: resolve journal, stop flag and .env like the bot.
+    os.chdir(Path(args.config).resolve().parent)
+    load_dotenv(Path(".env"))
+    mode = args.mode or cfg.mode
+    factory = (lambda: make_broker(cfg, mode)) if cfg.broker == "trading212" else None
+    server = RiskAgentServer(
+        cfg,
+        mode,
+        read_only=args.read_only,
+        broker_factory=factory,
+        notifier=make_notifier(cfg),
+    )
+    log.info(
+        "risk agent MCP server on stdio (mode=%s, broker=%s%s)",
+        mode,
+        cfg.broker,
+        ", read-only" if args.read_only else "",
+    )
+    server.serve()
+    return 0
+
+
 def cmd_instruments(cfg: Config, args: argparse.Namespace) -> int:
     from simplebot.brokers.trading212 import Trading212Broker
 
@@ -516,6 +543,11 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--static", default=None, help="write a self-contained HTML snapshot and exit")
     db.add_argument("--demo", action="store_true", help="seed synthetic paper trades first")
     db.add_argument("--demo-dir", default=None)
+    mc = sub.add_parser(
+        "mcp", help="serve the AI risk agent's tools over MCP (for Claude Desktop / Claude Code)"
+    )
+    mc.add_argument("--mode", choices=["paper", "live"], default=None, help="which journal")
+    mc.add_argument("--read-only", action="store_true", help="leave out the stop_bot tool")
     ins = sub.add_parser("instruments", help="search Trading 212 instrument tickers")
     ins.add_argument("--search", required=True)
     return p
@@ -533,6 +565,7 @@ COMMANDS = {
     "dashboard": cmd_dashboard,
     "guardian": cmd_guardian,
     "resume": cmd_resume,
+    "mcp": cmd_mcp,
 }
 
 
