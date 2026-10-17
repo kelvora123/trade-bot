@@ -108,6 +108,18 @@ It only reads; it cannot place an order. It binds to localhost. On a VPS, run
 `deploy/simplebot-dashboard.service` and open an SSH tunnel
 (`ssh -L 8787:127.0.0.1:8787 user@vps`) rather than exposing the port.
 
+### See it in a browser without installing anything
+
+- **GitHub Pages.** The `pages` workflow publishes the dashboard at
+  `https://<owner>.github.io/<repo>/` on every push to `main` (enable Pages once under
+  Settings, Pages, Source: GitHub Actions if the first run cannot do it itself). Without a
+  committed snapshot it shows a demo built from synthetic data; to publish your real numbers
+  see [dashboard/README.md](dashboard/README.md). A Pages snapshot is static.
+- **Codespaces.** Code, Create codespace on main. The container installs the bot, starts the
+  demo dashboard and opens it in a browser tab on port 8787. Run `python -m simplebot paper`
+  in the terminal and the same tab shows real paper trading. Codespaces stop when idle, so
+  for a bot that must run all day use a small VPS with the systemd units in `deploy/`.
+
 ## config.yaml
 
 | Key | Meaning |
