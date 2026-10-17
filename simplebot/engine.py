@@ -287,6 +287,7 @@ class Engine:
         return sig
 
     def _try_enter(self, symbol: str, sig: Signal, ts: datetime, mtc: float) -> bool:
+        sig = self._cap_stop(symbol, sig, ts)
         ok, why = self.risk.can_enter(symbol, sig.side, len(self.open), mtc)
         if not ok:
             self.skipped += 1
@@ -308,6 +309,21 @@ class Engine:
             self.capped_entries += 1
         self._enter(symbol, sig, qty, ts)
         return symbol in self.open
+
+    def _cap_stop(self, symbol: str, sig: Signal, ts: datetime) -> Signal:
+        """Rule 4: no stop may sit further than risk.max_stop_pct from the entry, whatever the
+        strategy or the model asked for."""
+        cap = sig.entry * self.cfg.risk.max_stop_pct / 100.0
+        if sig.risk_per_unit <= cap:
+            return sig
+        stop = sig.entry - cap if sig.side == "long" else sig.entry + cap
+        self.journal.log(
+            "stop_capped",
+            f"stop {sig.stop:.4f} tightened to {stop:.4f} ({self.cfg.risk.max_stop_pct}% cap)",
+            symbol=symbol,
+            ts=ts,
+        )
+        return Signal(sig.side, sig.entry, stop, sig.target, reason=sig.reason + " (stop capped)")
 
     def _maybe_enter(self, symbol: str, bars: pd.DataFrame, ts: datetime, mtc: float) -> None:
         sig = self._strategy_signal(symbol, bars, ts)

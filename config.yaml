@@ -17,6 +17,7 @@ risk:
   max_daily_loss_pct: 2            # hit this and the bot flattens everything and stops for the day
   max_positions: 3
   flatten_minutes_before_close: 10
+  max_stop_pct: 3.0                # no stop may sit further than this from the entry, whoever set it
 
 costs:
   commission: 0                    # per order, in instrument currency (T212: 0; IBKR: ~1)
@@ -58,6 +59,24 @@ decider:
   max_daily_cost_usd: 2.00         # once reached the model is not asked again that day (hold)
   effort: medium                   # low | medium | high (Claude only; lower = faster, cheaper)
   timeout_seconds: 30
+
+# The guardian: a watchdog that can STOP THE BOT COMPLETELY (flatten, write simplebot.STOPPED,
+# alert, exit; `python -m simplebot resume` is the only way back). The rules are always on.
+# The AI reviewer reads the results after each close and may add a stop; it can never resume.
+guardian:
+  max_drawdown_pct: 10             # equity this far below its peak: stop
+  max_loss_30d_pct: 6              # net loss over the last 30 days: stop
+  max_consecutive_losing_days: 5
+  max_halts_30d: 3                 # daily-loss stops in 30 days: stop
+  max_errors_per_day: 10           # errors or rejected orders in a day: stop
+  min_trades_for_judgement: 10
+  expected_range_r: 1.0            # average R this far below the backtest's: stop
+  provider: claude                 # AI reviewer: claude | ollama | none (needs ANTHROPIC_API_KEY; the rules apply without it)
+  model: claude-opus-5-5
+  ollama_model: llama3.1:8b
+  min_confidence: 0.7              # the AI's stop needs at least this confidence
+  max_daily_cost_usd: 0.50
+  stop_file: simplebot.STOPPED
 
 # Map your symbols to broker tickers when the broker uses different names (Trading 212 uses e.g. AAPL_US_EQ).
 symbol_map: {}

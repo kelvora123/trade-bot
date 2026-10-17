@@ -36,8 +36,10 @@ class Runner:
         clock: Callable[[], datetime] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         flatten_on_exit: bool = True,
+        guardian=None,
     ) -> None:
         self.cfg = cfg
+        self.guardian = guardian
         self.mode = mode
         self.engine = engine
         self.fetch_bars = fetch_bars
@@ -68,7 +70,28 @@ class Runner:
         if self.notifier is not None:
             self.notifier.send(text)
 
+    def guardian_stop(self, reason: str) -> None:
+        """Flatten everything and leave the loop; the flag keeps us from restarting."""
+        self.say(
+            f"GUARDIAN STOP: {reason}. Flattening and exiting; run `python -m simplebot resume`"
+            " after reviewing."
+        )
+        try:
+            self.engine._flatten("guardian", self.clock())
+        finally:
+            self.stop_requested = True
+
     def run_forever(self, max_steps: int | None = None) -> None:
+        if self.guardian is not None and self.guardian.stopped:
+            info = self.guardian.stop_info() or {}
+            self.say(
+                f"Simplebot refuses to start: stopped by the guardian ({info.get('source')}) on"
+                f" {str(info.get('ts', ''))[:16]}: {info.get('reason')}. Run"
+                " `python -m simplebot resume` after reviewing."
+            )
+            return
+        if self.guardian is not None:  # the starting equity is the first peak
+            self.guardian.check_equity(self.engine.equity(), self.clock())
         self.say(
             f"Simplebot {self.mode} started: {self.cfg.strategy} {self.engine.params} on"
             f" {self.cfg.symbols} ({self.cfg.timeframe}), broker {self.engine.broker.name}"
@@ -79,6 +102,16 @@ class Runner:
                 try:
                     active = self.step()
                     self.consecutive_errors = 0
+                    if self.guardian is not None and not self.stop_requested:
+                        if self.guardian.stopped:
+                            info = self.guardian.stop_info() or {}
+                            self.guardian_stop(info.get("reason", ""))
+                        else:
+                            reason = self.guardian.check_equity(self.engine.equity(), self.clock())
+                            if reason:
+                                self.guardian_stop(reason)
+                    if self.stop_requested:
+                        break
                 except (EngineError, BrokerError, Exception) as e:
                     self.consecutive_errors += 1
                     self.journal.log("error", repr(e))
@@ -151,7 +184,9 @@ class Runner:
         if any(sessions.is_in_session(sessions.market_for(s), now) for s in self.cfg.symbols):
             return
         self.summarised = day
-        self.engine.end_of_data(
-            now
-        )  # writes the daily row; flattens anything left (should be none)
+        self.engine.end_of_data(now)  # writes the daily row; flattens anything left
         self.say(self.engine.daily_summary())
+        if self.guardian is not None and not self.guardian.stopped:
+            outcome = self.guardian.daily_review(now)
+            if outcome.get("stopped"):
+                self.guardian_stop((self.guardian.stop_info() or {}).get("reason", ""))

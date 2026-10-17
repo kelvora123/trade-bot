@@ -73,6 +73,7 @@ def test_no_entry_inside_flatten_window(cfg):
 def test_daily_loss_halts_and_flattens(cfg):
     cfg.risk.max_daily_loss_pct = 2.0
     cfg.risk.risk_per_trade_pct = 5.0  # so a 1% move is a real loss
+    cfg.risk.max_stop_pct = 10.0  # keep the 8% stop so the daily loss fires first
     closes = [100, 100, 100, 95, 94, 94, 100, 100]
     df = bars_from_closes(closes, wick=0.0)
     engine, journal = make_engine(cfg, StubStrategy(fire_at=2, stop_pct=8.0))
