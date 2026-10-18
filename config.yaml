@@ -1,10 +1,12 @@
 # Simplebot configuration. This is the ONLY file you need to edit.
 
 mode: paper              # paper | live   (live also needs SIMPLEBOT_LIVE_CONFIRM=yes in .env)
-broker: paper            # paper | trading212 | ibkr   (paper = built-in simulator; trading212 in paper mode uses the T212 demo account)
+broker: alpaca           # alpaca | trading212 | ibkr | paper   (paper = built-in simulator; with mode: paper,
+                         # alpaca trades your Alpaca PAPER account and trading212 your T212 Practice account)
 account: invest          # invest | isa   (Trading 212 account type)
-account_currency: GBP    # the FX fee applies to instruments quoted in another currency
-symbols: [QQQ, SPY]      # Yahoo-style symbols. LSE symbols end in .L, e.g. EQQQ.L
+account_currency: USD    # Alpaca accounts are in USD (use GBP for Trading 212); the FX fee applies to
+                         # instruments quoted in another currency
+symbols: [QQQ, SPY]      # US tickers for Alpaca. (Trading 212 UK accounts need LSE symbols, e.g. EQQQ.L)
 timeframe: 5m            # 1m | 5m | 15m
 strategy: orb            # orb | intraday_momentum | vwap_revert
 params: {range_minutes: 5, target_r: 10}
@@ -20,13 +22,15 @@ risk:
   max_stop_pct: 3.0                # no stop may sit further than this from the entry, whoever set it
 
 costs:
-  commission: 0                    # per order, in instrument currency (T212: 0; IBKR: ~1)
-  fx_fee_pct: 0.15                 # T212 currency conversion fee, charged on each side (0 if you hold USD cash)
+  commission: 0                    # per order, in instrument currency (Alpaca: 0; T212: 0; IBKR: ~1)
+  fx_fee_pct: 0.15                 # T212 currency conversion fee per side; only charged when account_currency
+                                   # differs from the instrument's (never with Alpaca + US stocks)
   spread_bps: 2                    # full bid-ask spread; half is paid on each side
   slippage_bps: 3                  # per side
 
 data:
-  provider: yahoo                  # yahoo (keyless, last 60 days of 5m bars) | alpaca (free account, years of 1m bars) | csv | synthetic
+  provider: alpaca                 # alpaca (uses your Alpaca keys, years of 1m bars) | yahoo (keyless, last 60 days
+                                   # of 5m bars) | csv | synthetic
   lookback_days: 60
   cache_dir: cache
   csv_dir: data

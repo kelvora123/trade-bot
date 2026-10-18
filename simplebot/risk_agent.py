@@ -1,10 +1,11 @@
 """The AI risk agent's toolbox: an MCP server (Model Context Protocol) over stdio.
 
 Point Claude Desktop, Claude Code or any MCP client at `python -m simplebot mcp` and the AI
-gets a small set of tools to keep an eye on the bot and the Trading 212 account it trades:
+gets a small set of tools to keep an eye on the bot and the broker account it trades
+(Alpaca or Trading 212):
 
     bot_status        heartbeat, equity, open trades, halts, guardian stop, drawdown
-    account_snapshot  cash, equity, positions and pending orders read from Trading 212,
+    account_snapshot  cash, equity, positions and pending orders read from the broker,
                       reconciled against what the bot thinks it holds
     recent_trades     closed trades from the journal
     daily_results     one row per trading day
@@ -13,7 +14,7 @@ gets a small set of tools to keep an eye on the bot and the Trading 212 account 
     stop_bot          pull the plug: write the STOPPED flag (the running bot flattens and exits)
 
 What the agent can NOT do, by construction: place or cancel orders, resume a stopped bot,
-or change any setting. The Trading 212 calls are GETs only. `stop_bot` goes through the same
+or change any setting. The broker calls are reads only. `stop_bot` goes through the same
 flag file as the guardian, so `python -m simplebot resume` (a human) is the only way back.
 Run with `--read-only` to remove `stop_bot` as well.
 
@@ -44,7 +45,7 @@ SERVER_NAME = "simplebot-risk-agent"
 SERVER_VERSION = "0.1.0"
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 STALE_AFTER = 180  # seconds without a heartbeat before the bot counts as not running
-ACCOUNT_CACHE_SECONDS = 15.0  # Trading 212 allows the account endpoint once per 5 s
+ACCOUNT_CACHE_SECONDS = 15.0  # Trading 212 allows its account endpoint once per 5 s
 ALERT_KINDS = [
     "halt",
     "flatten",
@@ -61,11 +62,12 @@ ALERT_KINDS = [
     "coach_error",
 ]
 MIN_REASON_CHARS = 10
+ACCOUNT_BROKERS = ("alpaca", "trading212")
 
 INSTRUCTIONS = (
     "You are the risk manager for Simplebot, an automated day-trading bot that trades through "
-    "Trading 212. Your job is to protect capital, not to find trades. Use the read tools to "
-    "check on the bot. Call stop_bot only on clear evidence: losses beyond the configured "
+    "Alpaca or Trading 212. Your job is to protect capital, not to find trades. Use the read "
+    "tools to check on the bot. Call stop_bot only on clear evidence: losses beyond the configured "
     "limits, positions on the account the bot does not know about, repeated errors or "
     "rejected orders, a bot trading while it should be halted, or results far outside what "
     "the backtest promised. A stop flattens every position and only a human can resume. You "
@@ -76,7 +78,7 @@ RISK_REVIEW_PROMPT = """Run a risk review of the trading bot.
 
 1. Call bot_status. Note whether it is running, halted or already stopped, today's P&L and the
    drawdown from peak equity.
-2. Call account_snapshot. Check that the positions on Trading 212 match the bot's open trades,
+2. Call account_snapshot. Check that the positions at the broker match the bot's open trades,
    and that nothing is held that the bot does not know about.
 3. Call alerts for the last 24 hours and risk_check.
 4. Call daily_results and recent_trades if you need the longer picture.
@@ -211,18 +213,19 @@ class RiskAgentServer:
             journal.close()
 
     def _broker_or_error(self):
-        if self.cfg.broker != "trading212":
+        if self.cfg.broker not in ACCOUNT_BROKERS:
             raise ToolError(
-                f"config.yaml has broker: {self.cfg.broker}. account_snapshot reads a Trading 212"
-                " account; set broker: trading212 (paper mode uses the T212 Practice account)."
+                f"config.yaml has broker: {self.cfg.broker}. account_snapshot reads a real broker"
+                " account; set broker: alpaca or trading212 (paper mode uses their paper/practice"
+                " accounts)."
             )
         if self._broker is None:
             if self.broker_factory is None:
-                raise ToolError("no Trading 212 connection configured")
+                raise ToolError("no broker connection configured")
             try:
                 self._broker = self.broker_factory()
             except Exception as e:
-                raise ToolError(f"could not connect to Trading 212: {e}") from e
+                raise ToolError(f"could not connect to {self.cfg.broker}: {e}") from e
         return self._broker
 
     def _read_account(self) -> dict[str, Any]:
@@ -236,7 +239,7 @@ class RiskAgentServer:
             cash_free = broker.get_cash()
             equity = broker.get_equity()
         except Exception as e:
-            raise ToolError(f"Trading 212 request failed: {e}") from e
+            raise ToolError(f"{self.cfg.broker} request failed: {e}") from e
         out = {
             "account": "live" if getattr(broker, "live", False) else "practice (demo)",
             "cash_free": cash_free,
@@ -255,7 +258,7 @@ class RiskAgentServer:
 
     @staticmethod
     def reconcile(account_positions: list[dict], open_trades: list[dict]) -> list[str]:
-        """Differences between what Trading 212 holds and what the bot believes it holds."""
+        """Differences between what the broker holds and what the bot believes it holds."""
         held: dict[str, float] = {}
         for p in account_positions:
             sign = 1.0 if p["side"] == "long" else -1.0
@@ -269,13 +272,11 @@ class RiskAgentServer:
             a, b = held.get(sym, 0.0), bot.get(sym, 0.0)
             if abs(a - b) > max(1e-6, 0.01 * max(abs(a), abs(b))):
                 if b == 0:
-                    issues.append(f"{sym}: {a:g} held on Trading 212 but the bot has no open trade")
+                    issues.append(f"{sym}: {a:g} held at the broker but the bot has no open trade")
                 elif a == 0:
-                    issues.append(
-                        f"{sym}: the bot thinks it holds {b:g} but Trading 212 shows none"
-                    )
+                    issues.append(f"{sym}: the bot thinks it holds {b:g} but the broker shows none")
                 else:
-                    issues.append(f"{sym}: Trading 212 holds {a:g}, the bot thinks {b:g}")
+                    issues.append(f"{sym}: the broker holds {a:g}, the bot thinks {b:g}")
         return issues
 
     def account_snapshot(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -289,7 +290,7 @@ class RiskAgentServer:
         out["mismatches"] = self.reconcile(account["positions"], engine.get("open_trades", []))
         out["note"] = (
             "Positions outside the bot (bought by hand in the app) also show up as mismatches; "
-            "use a separate Trading 212 account or pie for the bot to keep this check clean."
+            "use a separate account for the bot to keep this check clean."
         )
         return out
 
@@ -363,13 +364,13 @@ class RiskAgentServer:
             stopped = g.stop_info()
         finally:
             journal.close()
-        if args.get("include_account", True) and self.cfg.broker == "trading212":
+        if args.get("include_account", True) and self.cfg.broker in ACCOUNT_BROKERS:
             try:
                 acct = self._read_account()
                 mism = self.reconcile(acct["positions"], engine.get("open_trades", []))
                 warnings.extend(f"position mismatch: {m}" for m in mism)
             except ToolError as e:
-                warnings.append(f"could not read the Trading 212 account: {e}")
+                warnings.append(f"could not read the {self.cfg.broker} account: {e}")
         return {
             "already_stopped": stopped,
             "rule_findings": findings,
@@ -418,7 +419,7 @@ class RiskAgentServer:
             },
             {
                 "name": "account_snapshot",
-                "description": "Read the Trading 212 account (cash, equity, positions, pending "
+                "description": "Read the broker account (cash, equity, positions, pending "
                 "orders) and list mismatches against the bot's open trades. Read-only.",
                 "inputSchema": {"type": "object", "properties": {}},
                 "annotations": {**ro, "openWorldHint": True},
@@ -466,13 +467,13 @@ class RiskAgentServer:
                 "name": "risk_check",
                 "description": "Evaluate the guardian's stop rules now (30-day loss, losing "
                 "streak, halts, errors, R versus backtest, drawdown), plus a stale-heartbeat "
-                "and Trading 212 position check. Reports only; stops nothing.",
+                "and broker position check. Reports only; stops nothing.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "include_account": {
                             "type": "boolean",
-                            "description": "also reconcile against Trading 212 (default true)",
+                            "description": "also reconcile against the broker (default true)",
                         }
                     },
                 },
@@ -540,7 +541,7 @@ class RiskAgentServer:
                     "prompts": [
                         {
                             "name": "risk_review",
-                            "description": "Check the bot and the Trading 212 account and give "
+                            "description": "Check the bot and the broker account and give "
                             "an OK / WATCH / STOP verdict.",
                         }
                     ]

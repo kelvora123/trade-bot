@@ -23,8 +23,8 @@ that must pass a backtest gate before anything is applied.
 - Risk limits enforced in code, not in the strategy: max 0.5% of equity at risk per trade,
   2% daily loss stop (flatten and stop for the day), max 3 open positions, flatten everything
   10 minutes before the close.
-- `paper`: the same engine running live on the built-in simulator or on the Trading 212 demo
-  account, as a long-lived process, with every decision logged to SQLite and an optional daily
+- `paper`: the same engine running live on your Alpaca paper account, your Trading 212
+  Practice account or the built-in simulator, as a long-lived process, with every decision logged to SQLite and an optional daily
   Telegram summary.
 - A learning loop: a deterministic walk-forward re-fit, plus an optional AI coach
   (Claude via the Anthropic API, or a local model via Ollama) whose proposals are gated by
@@ -34,7 +34,7 @@ that must pass a backtest gate before anything is applied.
   signal, or as the primary decider. Sizing, stops, the daily loss stop and the end-of-day
   flatten stay in code whatever it says. See "Claude in the loop".
 - An AI risk agent over MCP: Claude Desktop or Claude Code can check the bot and your
-  Trading 212 account, reconcile positions and stop the bot, but never trade or resume it.
+  broker account (Alpaca or Trading 212), reconcile positions and stop the bot, but never trade or resume it.
   See "AI risk agent over MCP".
 - `live`: only unlocks when `mode: live` is set **and** `SIMPLEBOT_LIVE_CONFIRM=yes` is in
   `.env` **and** the strategy has passed Rule 6 (beats buy-and-hold out of sample after costs
@@ -47,8 +47,15 @@ git clone https://github.com/kelvora123/trade-bot.git && cd trade-bot
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"          # add claude and/or ibkr extras if you want them: ".[dev,claude,ibkr]"
 cp .env.example .env             # fill in only what you use; .env is git-ignored
-python -m simplebot backtest     # ORB on QQQ+SPY, last 60 days of 5-minute Yahoo bars
+python -m simplebot account      # tests your Alpaca keys and shows the paper account
+python -m simplebot backtest     # ORB on QQQ+SPY, 60 days of 5-minute Alpaca bars
 ```
+
+The default broker is **Alpaca** (US stocks and ETFs, commission-free, USD account). Make a free
+account at alpaca.markets, switch the dashboard to **Paper Trading**, generate API keys and put
+them in `.env` as `ALPACA_API_KEY` and `ALPACA_API_SECRET`. The same keys fetch the price data.
+No Alpaca account yet? Add `--data yahoo` to the backtest, or set `broker: paper` to use the
+built-in simulator.
 
 No internet or just curious? `python -m simplebot backtest --data synthetic` runs on fake data
 (clearly labelled; it says nothing about markets).
@@ -74,10 +81,11 @@ python -m simplebot report                         # re-render the last saved re
 python -m simplebot paper
 ```
 
-With `broker: paper` (the default) this runs the engine on the built-in simulator, which fills
-market orders at the latest price moved against you by half the spread plus slippage, and
-charges the configured fees. With `broker: trading212` and demo keys in `.env`, orders go to
-your Trading 212 **demo** account instead. Either way the bot:
+With `broker: alpaca` (the default) and your paper keys in `.env`, orders go to your Alpaca
+**paper** account, which you can watch in Alpaca's dashboard. With `broker: trading212` and
+practice keys, they go to your Trading 212 **Practice** account. With `broker: paper` the engine
+runs on the built-in simulator, which fills market orders at the latest price moved against you
+by half the spread plus slippage, and charges the configured fees. Either way the bot:
 
 - polls bars every `poll_seconds` during market hours, feeds each completed bar to the engine,
   and checks software stops against the latest price in between;
@@ -128,8 +136,8 @@ It only reads; it cannot place an order. It binds to localhost. On a VPS, run
 | Key | Meaning |
 |---|---|
 | `mode` | `paper` or `live`. Live also needs `SIMPLEBOT_LIVE_CONFIRM=yes` in `.env`. |
-| `broker` | `paper` (simulator), `trading212` (demo in paper mode, live in live mode) or `ibkr`. |
-| `account`, `account_currency` | Trading 212 account type; the FX fee applies to instruments in another currency. |
+| `broker` | `alpaca` (paper account in paper mode, live in live mode), `trading212` (Practice in paper mode, live in live mode), `ibkr` or `paper` (built-in simulator). |
+| `account`, `account_currency` | Trading 212 account type; your account's currency (`USD` for Alpaca, `GBP` for a UK Trading 212 account). The FX fee only applies to instruments in another currency. |
 | `symbols` | Yahoo-style symbols. LSE symbols end in `.L`. |
 | `timeframe` | `1m`, `5m` or `15m` bars. |
 | `strategy`, `params` | Which strategy and its parameters. `params` is the only line the learning loop ever rewrites. |
@@ -224,16 +232,16 @@ and `live` refuse to run; only `python -m simplebot resume` (you) removes it.
 
 `python -m simplebot mcp` turns the bot into a toolbox for an AI agent, using the Model Context
 Protocol (MCP). Connect it to Claude Desktop or Claude Code and you can ask "how is the bot
-doing?" or "run a risk review" and the agent checks the bot and your Trading 212 account itself.
+doing?" or "run a risk review" and the agent checks the bot and your broker account itself.
 It runs on demand, alongside the guardian, which keeps watching on every bar.
 
 | Tool | What the agent gets |
 | --- | --- |
 | `bot_status` | running or not, halted, guardian stop, equity, today's P&L, open trades with stops, drawdown from peak, the limits |
-| `account_snapshot` | cash, equity, positions and pending orders read from Trading 212, plus any mismatch with the bot's open trades |
+| `account_snapshot` | cash, equity, positions and pending orders read from Alpaca or Trading 212, plus any mismatch with the bot's open trades |
 | `recent_trades`, `daily_results` | the journal: trades, win rate, daily P&L, halts |
 | `alerts` | halts, errors, rejected orders, capped stops, guardian actions |
-| `risk_check` | the guardian's stop rules evaluated now, a crashed-with-positions check and the Trading 212 reconciliation. Reports only |
+| `risk_check` | the guardian's stop rules evaluated now, a crashed-with-positions check and the broker reconciliation. Reports only |
 | `stop_bot` | stops the bot completely, exactly like a guardian stop: flatten, write `simplebot.STOPPED`, Telegram alert |
 
 There is also a `risk_review` prompt that walks the agent through all of it and asks for an
@@ -241,7 +249,7 @@ OK, WATCH or STOP verdict.
 
 **What it cannot do.** The agent cannot place or cancel orders, resume a stopped bot, or change
 any setting; those tools do not exist, and a test checks the code never calls them. The
-Trading 212 calls are reads only. Only `python -m simplebot resume`, run by you, undoes a stop.
+broker calls are reads only. Only `python -m simplebot resume`, run by you, undoes a stop.
 Start the server with `--read-only` to remove `stop_bot` too.
 
 **Connect Claude Desktop.** Settings, Developer, Edit Config, then add (use your own paths; on
@@ -271,15 +279,15 @@ the protocol: set `"command": "ssh"` and
 
 Notes:
 
-- `account_snapshot` and the reconciliation need `broker: trading212`; in paper mode they read
-  the Practice account, in live mode the live one (with the matching key in `.env`).
+- `account_snapshot` and the reconciliation need `broker: alpaca` or `trading212`; in paper mode
+  they read the paper or Practice account, in live mode the live one (with the matching key in `.env`).
 - Shares you bought by hand in the same account show up as mismatches. Give the bot its own
   account (for example the Practice account, or Invest while you hold long-term in the ISA).
-- The account read is cached for 15 seconds so the agent cannot eat into Trading 212's rate
+- The account read is cached for 15 seconds so the agent cannot eat into the broker's rate
   limits, which the running bot shares.
 - The video version of this idea connects a TradingView MCP server for charts and alerts. If you
   use one, add it next to `simplebot` in the same config; prices for the bot still come from the
-  data provider and orders still go to Trading 212.
+  data provider and orders still go to your broker.
 
 ## Costs (always on)
 
@@ -389,6 +397,30 @@ rules after costs. The journal and the daily summary will tell you.
 On any unexpected error in live mode the bot cancels open orders, flattens, sends an alert
 and stops. On Ctrl-C it flattens first.
 
+### Alpaca specifics
+
+- Paper and live accounts have **separate keys**. Use the paper keys until Rule 6 is met; for
+  live, swap in the live keys and set `mode: live` plus `SIMPLEBOT_LIVE_CONFIRM=yes`.
+- The bot sends market orders only, as with Trading 212, so stops and targets are software stops
+  checked on every poll (same gap risk as below). Fractional quantities are used for buys and
+  for closing fractional positions; Alpaca does not allow fractional short sales, so shorts are
+  rounded down to whole shares (shorting is off by default).
+- The bot sizes from your **cash**, never margin buying power, so it never borrows.
+- **Pattern day trader rule.** US rules limit margin accounts under $25,000 to 3 day trades in
+  any 5 trading days, and this bot closes everything each day. Alpaca enforces it, on paper
+  too: a 4th day trade is refused and logged as `order_rejected`. Keep paper equity at $25,000
+  or more (Alpaca paper accounts start at $100,000; you can reset the balance), or expect
+  refusals. A small live account would need to be a cash account, where unsettled sale
+  proceeds cannot be reused until the next day.
+- Alpaca paper accounts start with $100,000. The bot risks `risk_per_trade_pct` of whatever
+  equity it sees, so reset the paper balance to the amount you would really trade.
+- The account is in USD and US stock trades are commission-free, so with `account_currency: USD`
+  no FX fee is charged. If you fund it from GBP, Alpaca converts once when you deposit.
+- Price data comes from Alpaca's free IEX feed with the same keys. IEX is one exchange, so its
+  bars are thinner than the full market's; fine for liquid ETFs like SPY and QQQ.
+- `python -m simplebot account` shows equity, cash, positions and pending orders: use it to
+  test keys and to check the bot left nothing open.
+
 ### Trading 212 specifics (from the research, verify against your account)
 
 - Authentication is HTTP Basic with the API key and secret from the app (Settings, API).
@@ -435,7 +467,7 @@ python scripts/secret_scan.py --all
 ```
 
 Tests cover the cost model, sizing, every risk limit, the end-of-day flatten, the software stop
-logic, the paper broker, the Trading 212 adapter (with a fake HTTP session), the IBKR adapter
+logic, the paper broker, the Alpaca and Trading 212 adapters (with a fake HTTP session), the IBKR adapter
 (with a fake gateway), the backtester and benchmarks, the gate, the coach (with a fake model),
 the runner and the CLI. GitHub Actions runs lint, the secret scan, the tests and a synthetic
 backtest on every push; it never runs the bot.
@@ -449,7 +481,7 @@ adds a hook that blocks commits containing anything that looks like a key, plus 
 config.yaml                 the only file you edit
 .env.example                keys and tokens go in .env (git-ignored)
 simplebot/
-  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard | guardian | resume | mcp
+  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard | guardian | resume | mcp | account
   guardian.py               the watchdog: deterministic rules + optional AI reviewer that can stop the bot completely
   risk_agent.py             MCP server: tools for an AI risk agent (read-only plus stop_bot)
   dashboard.py + .html      the local dashboard (reads the journal and reports; never trades)
@@ -458,7 +490,7 @@ simplebot/
   costs.py                  the cost model
   strategies/               orb.py, intraday_momentum.py, vwap_revert.py, random_entry.py (benchmark)
   risk.py                   sizing, daily loss stop, position limits, flatten window, stop checks
-  brokers/                  base.py (interface), paper.py, trading212.py, ibkr.py, ratelimit.py
+  brokers/                  base.py (interface), paper.py, alpaca.py, trading212.py, ibkr.py, ratelimit.py
   engine.py                 the bar-by-bar engine shared by backtest, paper and live
   backtest.py report.py     walk-forward backtester and benchmarks; Markdown/HTML reports
   journal.py                SQLite decision log
