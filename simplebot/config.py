@@ -11,7 +11,7 @@ from typing import Any
 import yaml
 
 VALID_MODES = ("paper", "live")
-VALID_BROKERS = ("paper", "trading212", "ibkr")
+VALID_BROKERS = ("paper", "alpaca", "trading212", "ibkr")
 VALID_ACCOUNTS = ("invest", "isa")
 VALID_PROVIDERS = ("yahoo", "alpaca", "csv", "synthetic")
 VALID_COACH_PROVIDERS = ("none", "claude", "ollama")
@@ -253,7 +253,9 @@ def validate(cfg: Config) -> None:
     if cfg.starting_cash <= 0:
         raise ConfigError("starting_cash must be positive")
     if cfg.mode == "live" and cfg.broker == "paper":
-        raise ConfigError("mode: live needs a real broker (trading212 or ibkr), not 'paper'")
+        raise ConfigError(
+            "mode: live needs a real broker (alpaca, trading212 or ibkr), not 'paper'"
+        )
 
 
 def load_config(path: str | os.PathLike = "config.yaml") -> Config:

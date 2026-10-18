@@ -186,8 +186,8 @@ def test_account_snapshot_reads_t212_and_flags_mismatches(cfg, tmp_path):
     assert snap["account"] == "practice (demo)" and snap["equity"] == 1005.0
     assert snap["pending_orders"][0]["id"] == "9"
     assert snap["mismatches"] == [
-        "MSFT: the bot thinks it holds 1 but Trading 212 shows none",
-        "TSLA: 3 held on Trading 212 but the bot has no open trade",
+        "MSFT: the bot thinks it holds 1 but the broker shows none",
+        "TSLA: 3 held at the broker but the bot has no open trade",
     ]
     assert set(broker.calls) <= {"get_positions", "open_orders", "get_cash", "get_equity"}
 
@@ -204,7 +204,7 @@ def test_account_snapshot_errors_are_reported_not_raised(cfg, tmp_path):
     err, out = call(make(cfg, tmp_path, FakeT212(fail=True)), "account_snapshot")
     assert err and "401 bad key" in out["error"]
     err, out = call(make(cfg, tmp_path, t212=False), "account_snapshot")
-    assert err and "broker: trading212" in out["error"]
+    assert err and "broker: alpaca or trading212" in out["error"]
 
 
 def test_reconcile_tolerates_rounding():
@@ -261,7 +261,7 @@ def test_risk_check_finds_problems_without_stopping(cfg, tmp_path):
     assert any("drawdown 12.00%" in f for f in rc["rule_findings"])
     assert rc["guardian_would_stop"] is True
     assert any("heartbeat is stale" in w for w in rc["warnings"])
-    assert any("Trading 212 shows none" in w for w in rc["warnings"])
+    assert any("the broker shows none" in w for w in rc["warnings"])
     assert not Path(cfg.guardian.stop_file).exists()
 
 

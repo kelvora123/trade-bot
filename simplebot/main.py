@@ -186,6 +186,14 @@ def make_broker(cfg: Config, mode: str):
         from simplebot.brokers.paper import PaperBroker
 
         return PaperBroker(cfg.starting_cash, cost_model(cfg), fx_for=lambda s: fx_applies(cfg, s))
+    if cfg.broker == "alpaca":
+        from simplebot.brokers.alpaca import AlpacaBroker
+
+        return AlpacaBroker(
+            os.environ.get("ALPACA_API_KEY", ""),
+            os.environ.get("ALPACA_API_SECRET", ""),
+            live=(mode == "live"),
+        )
     if cfg.broker == "trading212":
         from simplebot.brokers.trading212 import Trading212Broker
 
@@ -428,6 +436,34 @@ def cmd_resume(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+ACCOUNT_BROKERS = ("alpaca", "trading212")
+
+
+def cmd_account(cfg: Config, args: argparse.Namespace) -> int:
+    """Connect to the broker and print the account: the quickest way to test your keys."""
+    from simplebot.brokers.base import BrokerError
+
+    mode = args.mode or cfg.mode
+    if cfg.broker not in ACCOUNT_BROKERS:
+        print(f"broker: {cfg.broker} has no account to read; set broker: alpaca or trading212")
+        return 1
+    try:
+        broker = make_broker(cfg, mode)
+        equity, cash = broker.get_equity(), broker.get_cash()
+        positions, pending = broker.get_positions(), broker.open_orders()
+    except BrokerError as e:
+        print(f"could not read the {cfg.broker} account: {e}")
+        return 1
+    kind = "LIVE (real money)" if getattr(broker, "live", False) else "paper / practice"
+    print(f"connected to {cfg.broker} ({kind})")
+    print(f"equity {equity:,.2f}   cash available to the bot {cash:,.2f}")
+    print(f"{len(positions)} open position(s)" + (":" if positions else ""))
+    for p in positions:
+        print(f"  {p.symbol:<10} {p.side:<5} {p.qty:g} @ {p.avg_price:,.2f}")
+    print(f"{len(pending)} pending order(s)")
+    return 0
+
+
 def cmd_mcp(cfg: Config, args: argparse.Namespace) -> int:
     """Serve the AI risk agent's tools over MCP (stdio) for Claude Desktop, Claude Code, etc."""
     from simplebot.notify import make_notifier
@@ -437,7 +473,7 @@ def cmd_mcp(cfg: Config, args: argparse.Namespace) -> int:
     os.chdir(Path(args.config).resolve().parent)
     load_dotenv(Path(".env"))
     mode = args.mode or cfg.mode
-    factory = (lambda: make_broker(cfg, mode)) if cfg.broker == "trading212" else None
+    factory = (lambda: make_broker(cfg, mode)) if cfg.broker in ACCOUNT_BROKERS else None
     server = RiskAgentServer(
         cfg,
         mode,
@@ -543,6 +579,8 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--static", default=None, help="write a self-contained HTML snapshot and exit")
     db.add_argument("--demo", action="store_true", help="seed synthetic paper trades first")
     db.add_argument("--demo-dir", default=None)
+    ac = sub.add_parser("account", help="connect to the broker and show the account (tests keys)")
+    ac.add_argument("--mode", choices=["paper", "live"], default=None)
     mc = sub.add_parser(
         "mcp", help="serve the AI risk agent's tools over MCP (for Claude Desktop / Claude Code)"
     )
@@ -566,6 +604,7 @@ COMMANDS = {
     "guardian": cmd_guardian,
     "resume": cmd_resume,
     "mcp": cmd_mcp,
+    "account": cmd_account,
 }
 
 
