@@ -77,18 +77,21 @@ def test_params_proposal_goes_through_gate_and_is_not_auto_applied(cfg, bars, mo
     assert "Risk (read-only" in FakeLLM(PARAMS_PROPOSAL).data["review"] or True
 
 
-def test_auto_apply_writes_config(cfg, bars, monkeypatch):
-    cfg.coach.auto_apply_params = True
+def test_coach_never_applies_even_with_the_old_auto_apply_flag(cfg, bars, monkeypatch):
+    cfg.coach.auto_apply_params = True  # old setting: still accepted, now ignored
     journal = Journal(cfg.journal_path, mode="paper")
     monkeypatch.setattr(
         learn,
         "evaluate_candidate",
         lambda c, b, p, strategy=None: (True, "beats", {"champion": {}, "challenger": {}}),
     )
+    before = load_config(cfg.path).params
     out = coach.run_coach(cfg, journal, FakeLLM(PARAMS_PROPOSAL), bars_by_symbol=bars)
-    assert out["outcomes"][0]["applied"] is True
-    assert load_config(cfg.path).params["range_minutes"] == 15
-    assert journal.params_history()[0]["applied"] is True
+    assert out["outcomes"][0]["verdict"] == "accepted"
+    assert out["outcomes"][0]["applied"] is False
+    assert "proposal only" in out["outcomes"][0]["reason"]
+    assert load_config(cfg.path).params == before
+    assert journal.params_history()[0]["applied"] is False
 
 
 def test_rejected_proposal_and_risk_keys(cfg, bars, monkeypatch):

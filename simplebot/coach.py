@@ -2,9 +2,9 @@
 
 Runs once a day after the close, as its own process (`python -m simplebot coach`). It reads the
 decision log, the latest backtest and its own past notes, writes a plain-English review and
-proposes changes as structured JSON. Every proposal goes through learn.gate. Parameter
-proposals that pass are applied only when coach.auto_apply_params is true; code proposals are
-written to strategies/proposed/ and backtested in a subprocess with no secrets, never applied.
+proposes changes as structured JSON. Every proposal goes through learn.gate. Nothing is ever
+applied: parameter proposals that pass are recorded for a human, and code proposals are
+written to strategies/proposed/ and backtested in a subprocess with no secrets.
 
 This module never imports simplebot.brokers and never sees broker keys (tests enforce it).
 """
@@ -334,15 +334,12 @@ def run_coach(
                 {"params": new, "verdict": "accepted" if ok else "rejected", "reason": reason}
             )
             if ok and not dry_run:
-                applied = bool(cfg.coach.auto_apply_params)
+                # proposals only: recorded in params_history, never written to config.yaml
                 learn.apply_params(
-                    cfg, journal, dict(cfg.params), merged, stats, "coach", applied=applied
+                    cfg, journal, dict(cfg.params), merged, stats, "coach", applied=False
                 )
-                outcome["applied"] = applied
-                if not applied:
-                    outcome["reason"] += (
-                        " (passed the gate; set coach.auto_apply_params: true or apply it yourself)"
-                    )
+                outcome["applied"] = False
+                outcome["reason"] += " (passed the gate; proposal only, apply it yourself)"
         elif kind in ("filter", "strategy"):
             code = str(p.get("code", ""))
             if "def signal" not in code:

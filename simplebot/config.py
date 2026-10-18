@@ -69,11 +69,19 @@ class LearningConfig:
 
 @dataclass
 class CoachConfig:
+    enabled: bool = True  # one switch: false turns the whole coach off
+    # the daily trade review (simplebot/trade_coach.py): one capped Claude call per day
+    review_model: str = "claude-haiku-5-5"
+    review_max_tokens: int = 3000
+    min_trades_for_params: int = 30
+    dir: str = "coach"
+    # the strategy research coach (simplebot/coach.py), run with `python -m simplebot coach`
     provider: str = "none"
     model: str = "claude-opus-5-5"
     ollama_model: str = "llama3.1:8b"
     lookback_days: int = 20
-    auto_apply_params: bool = False
+    auto_apply_params: bool = False  # ignored: the coach never applies anything (kept so old
+    # config files still load)
     max_daily_cost_usd: float = 0.5
 
 
@@ -214,6 +222,10 @@ def validate(cfg: Config) -> None:
         raise ConfigError(f"data.provider must be one of {VALID_PROVIDERS}")
     if cfg.coach.provider not in VALID_COACH_PROVIDERS:
         raise ConfigError(f"coach.provider must be one of {VALID_COACH_PROVIDERS}")
+    if not 256 <= cfg.coach.review_max_tokens <= 16000:
+        raise ConfigError("coach.review_max_tokens must be between 256 and 16000")
+    if cfg.coach.min_trades_for_params < 1:
+        raise ConfigError("coach.min_trades_for_params must be at least 1")
     d = cfg.decider
     if d.provider not in VALID_COACH_PROVIDERS:
         raise ConfigError(f"decider.provider must be one of {VALID_COACH_PROVIDERS}")

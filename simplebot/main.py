@@ -328,6 +328,9 @@ def cmd_coach(cfg: Config, args: argparse.Namespace) -> int:
     from simplebot.coach import run_coach
     from simplebot.llm import LLMError, make_llm
 
+    if not cfg.coach.enabled:
+        print("the coach is off (coach.enabled: false in config.yaml)")
+        return 0
     provider = args.provider or cfg.coach.provider
     if provider == "none":
         print("coach.provider is none; set claude or ollama in config.yaml (or --provider)")
@@ -420,6 +423,44 @@ def cmd_guardian(cfg: Config, args: argparse.Namespace) -> int:
         return 1
     v = out.get("verdict")
     print("review passed: nothing fired" + (f"; AI said continue: {v.reason}" if v else ""))
+    return 0
+
+
+def cmd_review(cfg: Config, args: argparse.Namespace) -> int:
+    """Run the daily trade coach now (it also runs by itself after each close)."""
+    from datetime import date as date_cls
+
+    from simplebot.guardian import backtest_metrics_for
+    from simplebot.trade_coach import make_review_llm, run_daily_review
+
+    if not cfg.coach.enabled:
+        print("the coach is off (coach.enabled: false in config.yaml)")
+        return 0
+    day = date_cls.fromisoformat(args.date) if args.date else None
+    journal = Journal(cfg.journal_path, mode=args.mode or cfg.mode)
+    out = run_daily_review(
+        cfg,
+        journal,
+        day,
+        llm=None if args.no_ai else make_review_llm(cfg),
+        backtest=backtest_metrics_for(cfg),
+        force=args.force,
+    )
+    if out.get("status") != "done":
+        print(f"coach: {out.get('status')} ({out.get('reason')})")
+        return 0
+    print(f"coach review for {out['date']}: {out['ai']} (cost ${out['cost_usd']:.4f})")
+    for t in out["trades"]:
+        print(f"  #{t['trade_id']} {t['symbol']} {t['r_multiple']:+.2f}R  {t['verdict']}")
+        if t["mistake"]:
+            print(f"      mistake: {t['mistake']}")
+        if t["lesson"]:
+            print(f"      lesson:  {t['lesson']}")
+    print(f"summary: {out['daily_summary']}")
+    if out["proposed_changes"]:
+        print(f"{len(out['proposed_changes'])} proposal(s) saved to {cfg.coach.dir}/proposals/")
+    for d in out["dropped_proposals"]:
+        print(f"dropped a proposal: {d['dropped']}")
     return 0
 
 
@@ -566,6 +607,11 @@ def build_parser() -> argparse.ArgumentParser:
     gd = sub.add_parser("guardian", help="run the watchdog review now; it may stop the bot")
     gd.add_argument("--mode", choices=["paper", "live"], default=None)
     gd.add_argument("--dry-run", action="store_true", help="report without stopping anything")
+    rv = sub.add_parser("review", help="run the daily trade coach now (also runs after each close)")
+    rv.add_argument("--date", default=None, help="YYYY-MM-DD (default: today, UTC)")
+    rv.add_argument("--mode", choices=["paper", "live"], default=None)
+    rv.add_argument("--force", action="store_true", help="review again even if already done")
+    rv.add_argument("--no-ai", action="store_true", help="stats only, no Claude call")
     rs = sub.add_parser("resume", help="clear a guardian stop (humans only)")
     rs.add_argument("--mode", choices=["paper", "live"], default=None)
     db = sub.add_parser(
@@ -603,6 +649,7 @@ COMMANDS = {
     "dashboard": cmd_dashboard,
     "guardian": cmd_guardian,
     "resume": cmd_resume,
+    "review": cmd_review,
     "mcp": cmd_mcp,
     "account": cmd_account,
 }

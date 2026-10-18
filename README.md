@@ -26,7 +26,10 @@ that must pass a backtest gate before anything is applied.
 - `paper`: the same engine running live on your Alpaca paper account, your Trading 212
   Practice account or the built-in simulator, as a long-lived process, with every decision logged to SQLite and an optional daily
   Telegram summary.
-- A learning loop: a deterministic walk-forward re-fit, plus an optional AI coach
+- A daily trade coach: after every close it reviews each trade like a disciplined pro
+  trader and risk manager (verdict, mistake, lesson) with one cheap Claude Haiku call, and
+  keeps a running `coach/journal.md`. Proposals are saved, never applied.
+- A learning loop: a deterministic walk-forward re-fit, plus an optional AI research coach
   (Claude via the Anthropic API, or a local model via Ollama) whose proposals are gated by
   the backtest and never touch your risk settings.
 - Optional, off by default: Claude (or a local model) making buy and sell decisions inside
@@ -148,7 +151,7 @@ It only reads; it cannot place an order. It binds to localhost. On a VPS, run
 | `costs.*` | Commission per order, FX fee % per side, spread bps, slippage bps per side. |
 | `data.*` | Provider (`yahoo`, `alpaca`, `csv`, `synthetic`), lookback days, cache dir. |
 | `learning.*` | Re-fit cadence and the gate thresholds (minimum out-of-sample trades, minimum Sharpe gain). |
-| `coach.*` | `provider` (`none`, `claude`, `ollama`), model names, lookback, `auto_apply_params`, daily cost cap. |
+| `coach.*` | `enabled` (the one off switch), the daily trade review (`review_model`, `review_max_tokens`, `min_trades_for_params`, `dir`), the research coach (`provider`, model names, lookback) and the daily cost cap. Nothing the coach proposes is ever applied. |
 | `decider.*` | Claude in the trading loop: `provider`, `role` (`last_resort`, `final_say`, `primary`), model, `every_minutes`, `max_stop_pct`, `min_confidence`, `max_daily_cost_usd`, `effort`, `timeout_seconds`. |
 | `symbol_map` | Your symbol to the broker's ticker, e.g. `{EQQQ.L: EQQQl_EQ}`. |
 | `poll_seconds`, `journal_path`, `reports_dir`, `telegram` | Plumbing. |
@@ -299,6 +302,39 @@ round trip before the trade has done anything. Set `fx_fee_pct: 0` only if you h
 your account trades in the instrument's own currency. For Interactive Brokers use
 `commission: 1` (the USD 1 minimum) and a realistic slippage figure.
 
+## The daily trade coach
+
+`simplebot/trade_coach.py` runs by itself after every close (the paper/live loop calls it) and
+reviews every trade closed that day, like a disciplined professional trader and risk manager.
+Run it by hand with `python -m simplebot review` (`--date YYYY-MM-DD`, `--force`, `--no-ai`).
+
+1. **Python computes the numbers first:** per trade the R multiple, planned R, holding time,
+   costs as a share of the money at risk, the exit reason and warning flags (stopped out within
+   10 minutes, costs over 25% of risk, closed by the end-of-day rule, very tight stop); for the
+   day the win rate, net P&L, costs, average R, profit factor, halts, errors, rejected orders
+   and the most common skip reasons; plus rolling stats and what the backtest expects.
+2. **One Claude call a day** gets only that compact summary (`claude-haiku-5-5` by default,
+   `review_max_tokens` caps the reply, effort low). A day costs about a tenth of a cent. The
+   cost is logged in the journal and counts towards `coach.max_daily_cost_usd`. Quiet days make
+   no call, and a day is never reviewed twice unless you pass `--force`.
+3. **It returns JSON:** per trade a `verdict` (good, acceptable or mistake, judged on process
+   rather than outcome), the `mistake` and the `lesson`; a `daily_summary`; and up to three
+   `proposed_changes`.
+4. **Code enforces the rules, whatever the model says:**
+   - proposals are only saved to `coach/proposals/<date>.json`; nothing is ever applied;
+   - no parameter proposals until `coach.min_trades_for_params` (30) closed trades exist, and
+     then only for the strategy's own parameters;
+   - any proposal touching the risk limits (risk per trade, daily loss cap, drawdown kill
+     switch, position limits, stop cap, sizing, leverage) or paper/live mode is dropped, and the
+     reason is recorded next to the kept proposals.
+5. **It writes** `coach/reviews/<date>.json` (all stats, verdicts, model, tokens, cost) and
+   appends a short entry to `coach/journal.md`. The `coach/` folder is git-ignored.
+
+Without `ANTHROPIC_API_KEY` in `.env`, or on an error or refusal, the review still runs on the
+Python numbers alone and says so. `coach.enabled: false` turns the whole coach off. The research
+coach below also never applies anything any more: the old `auto_apply_params` setting is
+accepted but ignored.
+
 ## The learning loop
 
 Two layers, neither inside the trading loop, both gated.
@@ -323,8 +359,8 @@ process (never from the trading process):
   structured JSON: `params` (new values for existing parameters), `filter` or `strategy`
   (a Python file);
 - every `params` proposal goes through the gate; rejected ones are written back into the
-  coach's notes with the numbers. A proposal that passes is applied only if
-  `coach.auto_apply_params: true`, otherwise it is listed for you;
+  coach's notes with the numbers. A proposal that passes is recorded and listed for you; it is
+  never applied automatically;
 - code proposals are written to `simplebot/strategies/proposed/`, backtested in a subprocess
   with every secret stripped from the environment, and reported. They are never applied or
   run in paper/live until you review them and merge them yourself;
@@ -481,7 +517,8 @@ adds a hook that blocks commits containing anything that looks like a key, plus 
 config.yaml                 the only file you edit
 .env.example                keys and tokens go in .env (git-ignored)
 simplebot/
-  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard | guardian | resume | mcp | account
+  main.py                   CLI: backtest | paper | live | report | coach | refit | check | instruments | dashboard | guardian | resume | review | mcp | account
+  trade_coach.py            the daily trade coach: Python stats + one Haiku review per day, proposals only
   guardian.py               the watchdog: deterministic rules + optional AI reviewer that can stop the bot completely
   risk_agent.py             MCP server: tools for an AI risk agent (read-only plus stop_bot)
   dashboard.py + .html      the local dashboard (reads the journal and reports; never trades)

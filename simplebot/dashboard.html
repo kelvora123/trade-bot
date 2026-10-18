@@ -423,7 +423,7 @@ function renderHeader() {
   for (const mk of st.markets) pills.append(mk.open ? pill(`${mk.minutes_to_close} min to close`, 'good', mk.name + ' open') : pill('next ' + dtShort(mk.next_open), '', mk.name + ' closed'));
   if (st.stopped) pills.append(pill(st.stopped.source || 'stopped', 'critical', 'Guardian stop'));
   if (DATA.decider.provider !== 'none') pills.append(pill(DATA.decider.description, 'warn', 'LLM decider'));
-  if (DATA.coach.provider !== 'none') pills.append(pill(DATA.coach.provider + (DATA.coach.auto_apply_params ? ' · auto-apply' : ''), '', 'Coach'));
+  if (DATA.coach.provider !== 'none') pills.append(pill(DATA.coach.provider, '', 'Coach'));
   const hb = document.getElementById('haltBanner');
   if (st.stopped) { hb.style.display = ''; hb.textContent = '🛑 STOPPED by the guardian (' + (st.stopped.source || '') + '): ' + (st.stopped.reason || '') + ' — run `python -m simplebot resume` after reviewing'; }
   else if (st.halted) { hb.style.display = ''; hb.textContent = '⛔ Trading halted for the day: ' + (st.halt_reason || 'daily loss stop'); } else hb.style.display = 'none';
@@ -523,7 +523,7 @@ function renderAll() {
   const dl = el('dl', { class: 'kv' });
   dl.append(el('dt', { text: 'LLM decider' })); dl.append(el('dd', { text: DATA.decider.provider === 'none' ? 'off (rules only)' : `${DATA.decider.description} · $${(llm.today.decider || 0).toFixed(2)} today of $${DATA.decider.max_daily_cost_usd} cap` }));
   if (dec.length) { dl.append(el('dt', { text: 'Decisions in range' })); dl.append(el('dd', { text: Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(' · ') })); }
-  dl.append(el('dt', { text: 'Coach' })); dl.append(el('dd', { text: DATA.coach.provider === 'none' ? 'off' : `${DATA.coach.provider} · ${DATA.coach.auto_apply_params ? 'auto-applies passing params' : 'proposals need your approval'} · $${(llm.today.coach || 0).toFixed(2)} today` }));
+  dl.append(el('dt', { text: 'Coach' })); dl.append(el('dd', { text: DATA.coach.provider === 'none' ? 'off' : `${DATA.coach.provider} · proposals need your approval · $${(llm.today.coach || 0).toFixed(2)} today` }));
   ll.append(dl);
   if (DATA.params_history.length) {
     const h = el('div', { class: 'tablewrap', style: 'margin-top:8px' });
