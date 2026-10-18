@@ -146,6 +146,7 @@ def collect(
         params_history = journal.params_history(limit=20)
         coach_notes = journal.coach_notes(limit=5)
         spend_today = {c: journal.llm_spend_today(c, now.date()) for c in ("decider", "coach")}
+        spend_today["coach"] += journal.llm_spend_today("coach_review", now.date())
         spend_30d = journal.llm_spend_since(30, now.date())
     finally:
         journal.close()
@@ -193,7 +194,8 @@ def collect(
         },
         "coach": {
             "provider": cfg.coach.provider,
-            "auto_apply_params": cfg.coach.auto_apply_params,
+            "enabled": cfg.coach.enabled,
+            "review_model": cfg.coach.review_model,
             "max_daily_cost_usd": cfg.coach.max_daily_cost_usd,
         },
         "journal_path": path,

@@ -190,3 +190,24 @@ class Runner:
             outcome = self.guardian.daily_review(now)
             if outcome.get("stopped"):
                 self.guardian_stop((self.guardian.stop_info() or {}).get("reason", ""))
+        self.run_trade_coach(day)
+
+    def run_trade_coach(self, day) -> None:
+        """The daily trade review, after the close. Never allowed to break the loop."""
+        if not self.cfg.coach.enabled or self.mode == "backtest":
+            return
+        try:
+            from simplebot.guardian import backtest_metrics_for
+            from simplebot.trade_coach import make_review_llm, run_daily_review
+
+            out = run_daily_review(
+                self.cfg,
+                self.engine.journal,
+                day,
+                llm=make_review_llm(self.cfg),
+                backtest=backtest_metrics_for(self.cfg),
+            )
+            if out.get("status") == "done":
+                self.say(f"Coach: {out['daily_summary']}")
+        except Exception as e:  # pragma: no cover - the coach must never stop trading
+            log.warning("daily coach failed: %s", e)

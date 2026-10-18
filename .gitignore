@@ -21,3 +21,5 @@ dist/
 *.egg-info/
 .venv/
 venv/
+# coach output (reviews, proposals, journal) is per machine
+/coach/
